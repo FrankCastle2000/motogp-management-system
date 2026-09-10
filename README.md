@@ -14,6 +14,28 @@
 - 车手、车队与账号操作日志，以及分页、筛选和自动保留策略
 - 跨页面连续播放的背景音乐与悬浮音量控制
 
+## 界面预览
+
+### 登录界面
+
+![MotoGP 信息管理系统登录界面](docs/screenshots/login.png)
+
+### 车手积分榜
+
+![2026 赛季 MotoGP 车手积分榜](docs/screenshots/standings.png)
+
+### 赛程日历
+
+![MotoGP 赛程日历 Grid View](docs/screenshots/calendar.png)
+
+### 车手信息
+
+![MotoGP 车手信息总览](docs/screenshots/riders.png)
+
+### 车队信息
+
+![MotoGP 车队信息总览](docs/screenshots/teams.png)
+
 ## 项目结构
 
 ```text
@@ -23,6 +45,8 @@ motogp-management-system/
 │  ├─ config.py         # 环境变量与运行配置
 │  ├─ db.py             # MySQL 表结构、查询和数据写入
 │  └─ motogp_sync.py    # MotoGP 官方公开数据同步逻辑
+├─ docs/
+│  └─ screenshots/      # README 使用的系统界面截图
 ├─ frontend/
 │  ├─ assets/
 │  │  ├─ audio/         # 背景音乐
