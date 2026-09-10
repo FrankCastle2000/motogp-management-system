@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>账号管理</title>
+  <link rel="icon" type="image/jpeg" href="/assets/images/site-icon.jpg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/css/common.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header class="page-header">
+      <div>
+        <h1>账号<span>管理</span></h1>
+        <p>超级管理员可提升权限或删除普通用户账号</p>
+      </div>
+      <div class="user-bar">
+        <nav class="nav-links">
+          <a href="/standings.html">车手积分</a>
+          <a href="/calendar.html">赛程日历</a>
+          <a href="/riders.html">车手信息</a>
+          <a href="/teams.html">车队信息</a>
+          <a href="/change-password.html">修改密码</a>
+          <a href="/users.html" class="active">账号管理</a>
+          <a href="/logs.html">操作日志</a>
+        </nav>
+        <span id="user-label">加载中…</span>
+        <span class="role-tag" id="role-tag"></span>
+        <button type="button" class="btn-ghost" id="logout-btn">退出</button>
+      </div>
+    </header>
+
+    <section class="panel">
+      <h2>用户列表</h2>
+      <div class="table-wrap">
+        <table class="user-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>账号</th>
+              <th>角色</th>
+              <th>注册时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="user-tbody">
+            <tr>
+              <td colspan="5" class="empty">加载中...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="toast" id="toast"></div>
+    </section>
+  </div>
+
+  <script src="/assets/js/api.js"></script>
+  <script>
+    const API = "/api/users";
+    const BUILTIN_ADMIN = "admin";
+    let currentUser = null;
+
+    const tbody = document.getElementById("user-tbody");
+    const toast = document.getElementById("toast");
+
+    function showToast(message, isError = false) {
+      toast.textContent = message;
+      toast.classList.toggle("error", isError);
+    }
+
+    function roleLabel(role) {
+      return role === "admin" ? "超级管理员" : "普通用户";
+    }
+
+    function renderRows(users) {
+      if (!users.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty">暂无用户</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = users
+        .map((u) => {
+          const isBuiltin = u.username === BUILTIN_ADMIN;
+          const isSelf = currentUser && u.id === currentUser.id;
+          const actions = [];
+
+          if (!isBuiltin && !isSelf) {
+            if (u.role === "user") {
+              actions.push(
+                `<button type="button" class="btn-promote" data-promote="${u.id}">设为管理员</button>`
+              );
+            } else {
+              actions.push(
+                `<button type="button" class="btn-demote" data-demote="${u.id}">取消管理员</button>`
+              );
+            }
+            actions.push(
+              `<button type="button" class="btn-danger" data-delete="${u.id}" data-name="${escapeHtml(u.username)}">删除</button>`
+            );
+          }
+
+          const opsHtml = actions.length
+            ? `<div class="row-actions">${actions.join("")}</div>`
+            : `<span style="color: var(--muted); font-size: 0.85rem">受保护账号</span>`;
+
+          return `
+            <tr>
+              <td>${u.id}</td>
+              <td>${escapeHtml(u.username)}${isSelf ? "（当前）" : ""}</td>
+              <td>${roleLabel(u.role)}</td>
+              <td>${escapeHtml(u.created_at || "-")}</td>
+              <td data-version="${u.version || 1}">${opsHtml}</td>
+            </tr>`;
+        })
+        .join("");
+    }
+
+    async function loadUsers() {
+      try {
+        const result = await apiRequest(API);
+        renderRows(result.data || []);
+      } catch (err) {
+        if (err.status === 401) {
+          navigateSitePage("/login.html");
+          return;
+        }
+        if (err.status === 403) {
+          navigateSitePage("/riders.html");
+          return;
+        }
+        tbody.innerHTML = `<tr><td colspan="5" class="empty">${escapeHtml(err.message)}</td></tr>`;
+        showToast(err.message, true);
+      }
+    }
+
+    async function init() {
+      currentUser = await requireLogin();
+      if (!currentUser) return;
+
+      if (currentUser.role !== "admin") {
+        navigateSitePage("/riders.html");
+        return;
+      }
+
+      document.getElementById("user-label").textContent = currentUser.username;
+      document.getElementById("role-tag").textContent = "超级管理员";
+      await loadUsers();
+    }
+
+    document.getElementById("logout-btn").addEventListener("click", () => logout());
+
+    tbody.addEventListener("click", async (e) => {
+      const promoteBtn = e.target.closest("[data-promote]");
+      const demoteBtn = e.target.closest("[data-demote]");
+      const deleteBtn = e.target.closest("[data-delete]");
+
+      try {
+        if (promoteBtn) {
+          const id = promoteBtn.getAttribute("data-promote");
+          const version = Number(promoteBtn.closest("td").dataset.version);
+          if (!confirm("确认将该用户设为超级管理员？")) return;
+          const result = await apiRequest(`${API}/${id}/role`, {
+            method: "PUT",
+            body: JSON.stringify({ role: "admin", version }),
+          });
+          showToast(result.message || "已设为管理员");
+          await loadUsers();
+          return;
+        }
+
+        if (demoteBtn) {
+          const id = demoteBtn.getAttribute("data-demote");
+          const version = Number(demoteBtn.closest("td").dataset.version);
+          if (!confirm("确认取消该用户的管理员权限？")) return;
+          const result = await apiRequest(`${API}/${id}/role`, {
+            method: "PUT",
+            body: JSON.stringify({ role: "user", version }),
+          });
+          showToast(result.message || "已取消管理员权限");
+          await loadUsers();
+          return;
+        }
+
+        if (deleteBtn) {
+          const id = deleteBtn.getAttribute("data-delete");
+          const name = deleteBtn.getAttribute("data-name");
+          if (!confirm(`确认删除账号「${name}」？此操作不可恢复。`)) return;
+          const result = await apiRequest(`${API}/${id}`, { method: "DELETE" });
+          showToast(result.message || "账号已删除");
+          await loadUsers();
+        }
+      } catch (err) {
+        if (err.status === 409) {
+          await loadUsers();
+          showToast(`${err.message}，列表已刷新`, true);
+        } else {
+          showToast(err.message, true);
+        }
+      }
+    });
+
+    init();
+  </script>
+</body>
+</html>

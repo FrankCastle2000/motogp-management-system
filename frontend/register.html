@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>注册 - MotoGP 信息管理系统</title>
+  <link rel="icon" type="image/jpeg" href="/assets/images/site-icon.jpg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/css/common.css" />
+</head>
+<body>
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <h1>注册<span>账号</span></h1>
+      <p class="subtitle">注册后获得普通用户权限（仅可查看）</p>
+      <form id="register-form">
+        <div class="field">
+          <label for="username">账号</label>
+          <input id="username" name="username" autocomplete="username" minlength="3" maxlength="32" required placeholder="3-32 个字符" />
+        </div>
+        <div class="field">
+          <label for="password">密码</label>
+          <input id="password" name="password" type="password" autocomplete="new-password" minlength="6" required placeholder="至少 6 位" />
+        </div>
+        <div class="field">
+          <label for="confirm">确认密码</label>
+          <input id="confirm" name="confirm" type="password" autocomplete="new-password" minlength="6" required placeholder="再次输入密码" />
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn-primary" id="submit-btn">注册</button>
+        </div>
+        <div class="toast" id="toast"></div>
+      </form>
+      <p class="auth-links">已有账号？<a href="/login.html">去登录</a></p>
+    </div>
+  </div>
+
+  <script src="/assets/js/api.js"></script>
+  <script src="/assets/js/auth.js"></script>
+</body>
+</html>

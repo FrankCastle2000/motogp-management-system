@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>登录 - MotoGP 信息管理系统</title>
+  <link rel="icon" type="image/jpeg" href="/assets/images/site-icon.jpg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/css/common.css" />
+</head>
+<body>
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <h1>欢迎<span>登录</span></h1>
+      <p class="subtitle">登录后可查看 MotoGP 车手与车队信息</p>
+      <form id="login-form">
+        <div class="field">
+          <label for="username">账号</label>
+          <input id="username" name="username" autocomplete="username" required placeholder="请输入账号" />
+        </div>
+        <div class="field">
+          <label for="password">密码</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="请输入密码" />
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn-primary" id="submit-btn">登录</button>
+        </div>
+        <div class="toast" id="toast"></div>
+      </form>
+      <p class="auth-links">
+        还没有账号？<a href="/register.html">去注册</a>
+        <span class="auth-link-separator">·</span>
+        <button type="button" class="auth-link-button" id="open-password-btn">修改密码</button>
+      </p>
+    </div>
+
+    <dialog class="modal modal-sm" id="guest-password-modal">
+      <div class="modal-header">
+        <h2>修改密码</h2>
+        <button type="button" class="modal-close" id="close-password-btn" aria-label="关闭">×</button>
+      </div>
+      <p class="password-hint">无需登录。为保护账号安全，请先验证账号和当前密码。</p>
+      <form id="guest-password-form">
+        <div class="field">
+          <label for="reset-username">账号</label>
+          <input id="reset-username" autocomplete="username" maxlength="32" required placeholder="请输入账号" />
+        </div>
+        <div class="field">
+          <label for="reset-current-password">当前密码</label>
+          <input id="reset-current-password" type="password" autocomplete="current-password" maxlength="128" required placeholder="请输入当前密码" />
+        </div>
+        <div class="field">
+          <label for="reset-new-password">新密码</label>
+          <input id="reset-new-password" type="password" autocomplete="new-password" minlength="6" maxlength="128" required placeholder="至少 6 位" />
+        </div>
+        <div class="field">
+          <label for="reset-confirm-password">确认新密码</label>
+          <input id="reset-confirm-password" type="password" autocomplete="new-password" minlength="6" maxlength="128" required placeholder="再次输入新密码" />
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn-primary" id="reset-submit-btn">确认修改</button>
+        </div>
+        <div class="toast" id="reset-toast" role="status" aria-live="polite"></div>
+      </form>
+    </dialog>
+  </div>
+
+  <script src="/assets/js/api.js"></script>
+  <script src="/assets/js/auth.js"></script>
+</body>
+</html>

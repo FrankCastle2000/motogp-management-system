@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>操作日志 - MotoGP 信息管理系统</title>
+  <link rel="icon" type="image/jpeg" href="/assets/images/site-icon.jpg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/css/common.css" />
+</head>
+<body>
+  <div class="wrap logs-wrap">
+    <header class="page-header">
+      <div>
+        <h1>操作<span>日志</span></h1>
+        <p>记录车手、车队、赛程、积分与账号权限的新增、修改和删除操作</p>
+      </div>
+      <div class="user-bar">
+        <nav class="nav-links">
+          <a href="/standings.html">车手积分</a>
+          <a href="/calendar.html">赛程日历</a>
+          <a href="/riders.html">车手信息</a>
+          <a href="/teams.html">车队信息</a>
+          <a href="/change-password.html">修改密码</a>
+          <a href="/users.html">账号管理</a>
+          <a href="/logs.html" class="active">操作日志</a>
+        </nav>
+        <span id="user-label">加载中…</span>
+        <span class="role-tag" id="role-tag"></span>
+        <button type="button" class="btn-ghost" id="logout-btn">退出</button>
+      </div>
+    </header>
+
+    <section class="panel log-list-panel">
+      <div class="panel-heading">
+        <h2>最近操作</h2>
+        <button type="button" class="btn-ghost" id="refresh-btn">刷新</button>
+      </div>
+      <form class="filter-bar log-filter-bar" id="log-filter-form">
+        <input id="filter-operator" placeholder="操作人" aria-label="按操作人筛选" />
+        <select id="filter-entity" aria-label="按对象类型筛选">
+          <option value="">全部对象</option><option value="rider">车手</option><option value="team">车队</option><option value="race">赛程</option><option value="race_schedule">分站日程</option><option value="race_result">分站排名</option><option value="standing">积分</option><option value="user">账号</option>
+        </select>
+        <select id="filter-action" aria-label="按操作类型筛选">
+          <option value="">全部操作</option><option value="create">新增</option><option value="update">修改</option><option value="delete">删除</option>
+        </select>
+        <input id="filter-date-from" type="date" aria-label="开始日期" />
+        <span class="filter-separator">至</span>
+        <input id="filter-date-to" type="date" aria-label="结束日期" />
+        <div class="filter-actions" style="display:grid;grid-template-columns:72px 72px;gap:8px;flex:0 0 152px">
+          <button type="submit" class="btn-primary" style="width:72px">筛选</button>
+          <button type="button" class="btn-ghost" id="reset-filter-btn" style="width:72px">重置</button>
+        </div>
+      </form>
+      <div class="table-wrap log-table-wrap">
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>操作时间</th>
+              <th>操作人</th>
+              <th>操作</th>
+              <th>对象类型</th>
+              <th>对象</th>
+              <th>修改详情</th>
+            </tr>
+          </thead>
+          <tbody id="log-tbody">
+            <tr><td colspan="6" class="empty">加载中...</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="pagination-bar">
+        <span id="retention-note"></span>
+        <div class="pagination-controls">
+          <select id="page-size" aria-label="每页条数"><option value="20">20 条/页</option><option value="50">50 条/页</option><option value="100">100 条/页</option></select>
+          <button type="button" class="btn-ghost" id="prev-page">上一页</button>
+          <span id="page-info">第 1 / 1 页</span>
+          <button type="button" class="btn-ghost" id="next-page">下一页</button>
+        </div>
+      </div>
+      <div class="toast" id="toast"></div>
+    </section>
+  </div>
+
+  <script src="/assets/js/api.js"></script>
+  <script>
+    const LOG_API = "/api/logs";
+    let currentUser = null;
+    let currentPage = 1;
+    let totalPages = 1;
+
+    const tbody = document.getElementById("log-tbody");
+    const toast = document.getElementById("toast");
+    const fieldLabels = {
+      rider_number: "车手编号",
+      english_name: "英文名",
+      chinese_name: "中文名",
+      nickname: "昵称",
+      nationality: "国籍",
+      team_name: "所属车队",
+      bike: "驾驶车辆",
+      birth_date: "出生日期",
+      birth_place: "出生地点",
+      name: "车队名称",
+      manufacturer: "车辆制造商",
+      members: "车队成员",
+      username: "账号",
+      role: "权限",
+      created_at: "创建时间",
+      password_changed_at: "密码修改时间",
+      season: "赛季",
+      round_number: "分站序号",
+      flag: "旗帜",
+      country: "国家或地区",
+      country_en: "英文名称",
+      start_date: "开始日期",
+      end_date: "结束日期",
+      circuit: "赛道",
+      position: "排名",
+      points: "积分",
+      race_wins: "正赛胜场",
+      podiums: "领奖台",
+      race_type: "比赛类型",
+      entries: "排名明细",
+    };
+
+    function actionLabel(action) {
+      return { create: "新增", update: "修改", delete: "删除" }[action] || action;
+    }
+
+    function entityLabel(type) {
+      return { rider: "车手", team: "车队", race: "赛程", race_schedule: "分站日程", race_result: "分站排名", standing: "车手积分", user: "账号" }[type] || type;
+    }
+
+    function displayValue(value) {
+      if (value === null || value === undefined || value === "") return "未设置";
+      if (value === "admin") return "管理员";
+      if (value === "user") return "普通用户";
+      return String(value);
+    }
+
+    function entityFields(type) {
+      if (type === "rider") return ["rider_number", "english_name", "chinese_name", "nickname", "nationality", "team_name", "bike", "birth_date", "birth_place"];
+      if (type === "team") return ["name", "manufacturer", "members"];
+      if (type === "race") return ["season", "round_number", "flag", "country", "country_en", "start_date", "end_date", "circuit"];
+      if (type === "race_schedule") return ["entries"];
+      if (type === "race_result") return ["race_type", "entries"];
+      if (type === "standing") return ["season", "position", "rider_number", "english_name", "chinese_name", "points", "race_wins", "podiums"];
+      return ["username", "role", "created_at", "password_changed_at"];
+    }
+
+    function renderSnapshot(data, type) {
+      const fields = entityFields(type);
+      return `<dl class="log-field-list">${fields.map((key) => `
+        <div>
+          <dt>${escapeHtml(fieldLabels[key] || key)}</dt>
+          <dd>${escapeHtml(displayValue((data || {})[key]))}</dd>
+        </div>
+      `).join("")}</dl>`;
+    }
+
+    function describeOperation(log) {
+      const typeName = entityLabel(log.entity_type);
+      const targetName = escapeHtml(log.entity_name);
+      const before = log.before_data || {};
+      const after = log.after_data || {};
+
+      if (log.action === "create") {
+        return `
+          <div class="log-template-title">新增${escapeHtml(typeName)}「${targetName}」，录入信息如下：</div>
+          ${renderSnapshot(after, log.entity_type)}
+        `;
+      }
+
+      if (log.action === "delete") {
+        return `
+          <div class="log-template-title">删除${escapeHtml(typeName)}「${targetName}」，删除前信息如下：</div>
+          ${renderSnapshot(before, log.entity_type)}
+        `;
+      }
+
+      if (log.action === "update") {
+        const changes = entityFields(log.entity_type)
+        .filter((key) => before[key] !== after[key])
+        .map((key) => {
+          const label = fieldLabels[key] || key;
+          return `<li><strong>${escapeHtml(label)}</strong><span class="log-old-value">${escapeHtml(displayValue(before[key]))}</span><span class="log-arrow">→</span><span class="log-new-value">${escapeHtml(displayValue(after[key]))}</span></li>`;
+        });
+        return changes.length
+          ? `<div class="log-template-title">修改${escapeHtml(typeName)}「${targetName}」，具体变更如下：</div><ul class="log-change-list">${changes.join("")}</ul>`
+          : `<div class="log-template-title">保存了${escapeHtml(typeName)}「${targetName}」，但字段内容没有变化。</div>`;
+      }
+
+      return `<div class="log-template-title">执行了“${escapeHtml(actionLabel(log.action))}”操作。</div>`;
+    }
+
+    function renderRows(logs) {
+      if (!logs.length) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无操作日志</td></tr>';
+        return;
+      }
+      tbody.innerHTML = logs.map((log) => `
+        <tr>
+          <td>${escapeHtml(log.created_at)}</td>
+          <td>${escapeHtml(log.operator_username)}</td>
+          <td><span class="log-action log-${escapeHtml(log.action)}">${escapeHtml(actionLabel(log.action))}</span></td>
+          <td>${escapeHtml(entityLabel(log.entity_type))}</td>
+          <td>${escapeHtml(log.entity_name)}${log.entity_id == null ? "" : ` <span class="log-id">#${log.entity_id}</span>`}</td>
+          <td class="log-details">${describeOperation(log)}</td>
+        </tr>
+      `).join("");
+    }
+
+    async function loadLogs() {
+      try {
+        const params = new URLSearchParams({
+          page: currentPage,
+          page_size: document.getElementById("page-size").value,
+        });
+        const filters = {
+          operator: document.getElementById("filter-operator").value.trim(),
+          entity_type: document.getElementById("filter-entity").value,
+          action: document.getElementById("filter-action").value,
+          date_from: document.getElementById("filter-date-from").value,
+          date_to: document.getElementById("filter-date-to").value,
+        };
+        Object.entries(filters).forEach(([key, value]) => value && params.set(key, value));
+        const result = await apiRequest(`${LOG_API}?${params}`);
+        const data = result.data || {};
+        renderRows(data.items || []);
+        totalPages = Math.max(1, Math.ceil((data.total || 0) / (data.page_size || 20)));
+        currentPage = Math.min(data.page || currentPage, totalPages);
+        document.getElementById("page-info").textContent = `第 ${currentPage} / ${totalPages} 页，共 ${data.total || 0} 条`;
+        document.getElementById("prev-page").disabled = currentPage <= 1;
+        document.getElementById("next-page").disabled = currentPage >= totalPages;
+        const retention = data.retention || {};
+        const policyParts = [];
+        if (retention.retention_days) policyParts.push(`保留 ${retention.retention_days} 天`);
+        if (retention.max_rows) policyParts.push(`最多 ${retention.max_rows} 条`);
+        document.getElementById("retention-note").textContent = policyParts.length
+          ? `日志策略：${policyParts.join("，")}` : "日志自动清理已关闭";
+        toast.textContent = "";
+        toast.classList.remove("error");
+      } catch (err) {
+        if (err.status === 401) return navigateSitePage("/login.html");
+        if (err.status === 403) return navigateSitePage("/riders.html");
+        tbody.innerHTML = `<tr><td colspan="6" class="empty">${escapeHtml(err.message)}</td></tr>`;
+        toast.textContent = err.message;
+        toast.classList.add("error");
+      }
+    }
+
+    async function init() {
+      currentUser = await requireLogin();
+      if (!currentUser) return;
+      if (currentUser.role !== "admin") return navigateSitePage("/riders.html");
+      document.getElementById("user-label").textContent = currentUser.username;
+      document.getElementById("role-tag").textContent = "超级管理员";
+      await loadLogs();
+    }
+
+    document.getElementById("logout-btn").addEventListener("click", () => logout());
+    document.getElementById("refresh-btn").addEventListener("click", () => loadLogs());
+    document.getElementById("log-filter-form").addEventListener("submit", (e) => {
+      e.preventDefault(); currentPage = 1; loadLogs();
+    });
+    document.getElementById("reset-filter-btn").addEventListener("click", () => {
+      document.getElementById("log-filter-form").reset(); currentPage = 1; loadLogs();
+    });
+    document.getElementById("page-size").addEventListener("change", () => { currentPage = 1; loadLogs(); });
+    document.getElementById("prev-page").addEventListener("click", () => { if (currentPage > 1) { currentPage--; loadLogs(); } });
+    document.getElementById("next-page").addEventListener("click", () => { if (currentPage < totalPages) { currentPage++; loadLogs(); } });
+    init();
+  </script>
+</body>
+</html>

@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MotoGP 车队信息</title>
+  <link rel="icon" type="image/jpeg" href="/assets/images/site-icon.jpg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/css/common.css" />
+</head>
+<body>
+  <div class="wrap teams-wrap">
+    <header class="page-header">
+      <div>
+        <h1>MotoGP <span>车队</span></h1>
+        <p id="page-desc">登录后可查看车队信息</p>
+      </div>
+      <div class="user-bar">
+        <nav class="nav-links">
+          <a href="/standings.html">车手积分</a>
+          <a href="/calendar.html">赛程日历</a>
+          <a href="/riders.html">车手信息</a>
+          <a href="/teams.html" class="active">车队信息</a>
+          <a href="/change-password.html">修改密码</a>
+          <a href="/users.html" id="users-link" hidden>账号管理</a>
+          <a href="/logs.html" id="logs-link" hidden>操作日志</a>
+        </nav>
+        <span id="user-label">加载中…</span>
+        <span class="role-tag" id="role-tag"></span>
+        <button type="button" class="btn-ghost" id="logout-btn">退出</button>
+      </div>
+    </header>
+
+    <dialog class="modal modal-sm" id="team-modal">
+      <div class="modal-header">
+        <h2 id="form-title">新增车队</h2>
+        <button type="button" class="modal-close" id="modal-close-btn" aria-label="关闭">×</button>
+      </div>
+      <form id="team-form">
+        <input type="hidden" id="team-id" />
+        <input type="hidden" id="team-version" />
+        <div class="form-grid">
+          <div class="field">
+            <label for="team-name">车队名称</label>
+            <input id="team-name" maxlength="128" required placeholder="Ducati Lenovo Team" />
+          </div>
+          <div class="field">
+            <label for="manufacturer">车辆制造商</label>
+            <input id="manufacturer" maxlength="128" required placeholder="Ducati" />
+          </div>
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn-primary" id="submit-btn" style="width: auto">添加</button>
+          <button type="button" class="btn-ghost" id="cancel-btn">取消</button>
+          <button type="button" class="btn-clear-draft" id="clear-draft-btn">清空草稿</button>
+        </div>
+        <div class="toast" id="toast"></div>
+        <div class="draft-hint" id="draft-hint">新增内容会自动保存为本地草稿</div>
+      </form>
+    </dialog>
+
+    <section class="panel team-list-panel">
+      <div class="panel-heading">
+        <h2>车队总览</h2>
+        <button type="button" class="btn-primary btn-add" id="add-team-btn" hidden>新增车队</button>
+      </div>
+      <form class="filter-bar" id="team-filter-form">
+        <input id="filter-team-name" placeholder="车队名称" aria-label="按车队名称搜索" />
+        <input id="filter-manufacturer" placeholder="车辆制造商" aria-label="按制造商搜索" />
+        <div class="filter-actions" style="display:grid;grid-template-columns:72px 72px;gap:8px;flex:0 0 152px">
+          <button type="submit" class="btn-primary" style="width:72px">搜索</button>
+          <button type="button" class="btn-ghost" id="reset-filter-btn" style="width:72px">重置</button>
+        </div>
+      </form>
+      <div class="table-wrap team-table-wrap">
+        <table class="team-table">
+          <thead>
+            <tr>
+              <th>车队名称</th>
+              <th>车队成员</th>
+              <th>
+                <button type="button" class="sort-button active" id="manufacturer-sort-btn" aria-label="车辆制造商当前按首字母升序排列，点击切换为降序">
+                  车辆制造商 <span class="sort-indicator" aria-hidden="true">↑</span>
+                </button>
+              </th>
+              <th id="ops-th">操作</th>
+            </tr>
+          </thead>
+          <tbody id="team-tbody">
+            <tr>
+              <td colspan="4" class="empty">加载中...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="toast" id="list-toast"></div>
+    </section>
+  </div>
+
+  <script src="/assets/js/api.js"></script>
+  <script>
+    const API = "/api/teams";
+    const TEAM_DRAFT_KEY = "motogp:team:create-draft:v1";
+    let currentUser = null;
+    let isAdmin = false;
+    let teamsById = new Map();
+    let currentTeams = [];
+    let manufacturerSortDirection = "asc";
+    let draftSaveTimer = null;
+    const manufacturerCollator = new Intl.Collator("zh-CN", {
+      sensitivity: "base",
+      numeric: true,
+    });
+
+    const modal = document.getElementById("team-modal");
+    const addBtn = document.getElementById("add-team-btn");
+    const modalCloseBtn = document.getElementById("modal-close-btn");
+    const form = document.getElementById("team-form");
+    const formTitle = document.getElementById("form-title");
+    const teamIdInput = document.getElementById("team-id");
+    const teamVersionInput = document.getElementById("team-version");
+    const teamNameInput = document.getElementById("team-name");
+    const manufacturerInput = document.getElementById("manufacturer");
+    const submitBtn = document.getElementById("submit-btn");
+    const cancelBtn = document.getElementById("cancel-btn");
+    const clearDraftBtn = document.getElementById("clear-draft-btn");
+    const toast = document.getElementById("toast");
+    const draftHint = document.getElementById("draft-hint");
+    const listToast = document.getElementById("list-toast");
+    const tbody = document.getElementById("team-tbody");
+    const opsTh = document.getElementById("ops-th");
+    const manufacturerSortBtn = document.getElementById("manufacturer-sort-btn");
+
+    function showToast(el, message, isError = false) {
+      el.textContent = message;
+      el.classList.toggle("error", isError);
+    }
+
+    function colSpan() {
+      return isAdmin ? 4 : 3;
+    }
+
+    function resetForm() {
+      form.reset();
+      teamIdInput.value = "";
+      teamVersionInput.value = "";
+      formTitle.textContent = "新增车队";
+      submitBtn.textContent = "添加";
+      clearDraftBtn.hidden = false;
+      draftHint.hidden = false;
+      draftHint.textContent = "新增内容会自动保存为本地草稿";
+    }
+
+    function getTeamFormData() {
+      return {
+        name: teamNameInput.value.trim(),
+        manufacturer: manufacturerInput.value.trim(),
+      };
+    }
+
+    function saveTeamDraftNow() {
+      if (!isAdmin || teamIdInput.value) return;
+      clearTimeout(draftSaveTimer);
+      draftSaveTimer = null;
+      try {
+        const draft = getTeamFormData();
+        if (!Object.values(draft).some(Boolean)) {
+          localStorage.removeItem(TEAM_DRAFT_KEY);
+          draftHint.textContent = "新增内容会自动保存为本地草稿";
+          return;
+        }
+        localStorage.setItem(
+          TEAM_DRAFT_KEY,
+          JSON.stringify({ ...draft, saved_at: Date.now() })
+        );
+        draftHint.textContent = "草稿已自动保存";
+      } catch (err) {
+        draftHint.textContent = "当前浏览器无法保存草稿";
+      }
+    }
+
+    function scheduleTeamDraftSave() {
+      if (teamIdInput.value) return;
+      clearTimeout(draftSaveTimer);
+      draftHint.textContent = "正在保存草稿…";
+      draftSaveTimer = setTimeout(saveTeamDraftNow, 300);
+    }
+
+    function clearTeamDraft() {
+      clearTimeout(draftSaveTimer);
+      draftSaveTimer = null;
+      try {
+        localStorage.removeItem(TEAM_DRAFT_KEY);
+      } catch (err) {
+        // 存储不可用时不影响已经成功提交的数据。
+      }
+    }
+
+    function restoreTeamDraft() {
+      try {
+        const draft = JSON.parse(localStorage.getItem(TEAM_DRAFT_KEY) || "null");
+        if (!draft) return false;
+        teamNameInput.value = draft.name || "";
+        manufacturerInput.value = draft.manufacturer || "";
+        draftHint.textContent = "已恢复上次未提交的草稿";
+        return true;
+      } catch (err) {
+        try {
+          localStorage.removeItem(TEAM_DRAFT_KEY);
+        } catch (storageError) {
+          // 忽略浏览器禁用本地存储的情况。
+        }
+        return false;
+      }
+    }
+
+    function closeModal(preserveDraft = true) {
+      if (preserveDraft && modal.open && !teamIdInput.value) saveTeamDraftNow();
+      modal.close();
+      resetForm();
+      showToast(toast, "");
+    }
+
+    function openCreateModal() {
+      resetForm();
+      showToast(toast, "");
+      restoreTeamDraft();
+      modal.showModal();
+      teamNameInput.focus();
+    }
+
+    function renderRows(teams) {
+      currentTeams = [...teams];
+      const direction = manufacturerSortDirection === "asc" ? 1 : -1;
+      const sortedTeams = [...currentTeams].sort((a, b) => {
+        const order = manufacturerCollator.compare(
+          String(a.manufacturer || ""),
+          String(b.manufacturer || "")
+        );
+        return order ? order * direction : manufacturerCollator.compare(a.name, b.name);
+      });
+      teamsById = new Map(sortedTeams.map((team) => [String(team.id), team]));
+      if (!sortedTeams.length) {
+        tbody.innerHTML = `<tr><td colspan="${colSpan()}" class="empty">暂无车队数据</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = sortedTeams
+        .map((t) => {
+          const members = t.members
+            ? t.members
+                .split("、")
+                .map((member) => `<div class="team-member">${escapeHtml(member)}</div>`)
+                .join("")
+            : '<span class="empty-members">暂无成员</span>';
+          const ops = isAdmin
+            ? `<td>
+                <div class="row-actions">
+                  <button type="button" class="btn-edit" data-edit-id="${t.id}">编辑</button>
+                  <button type="button" class="btn-danger" data-id="${t.id}">删除</button>
+                </div>
+              </td>`
+            : "";
+          return `
+            <tr>
+              <td>${escapeHtml(t.name)}</td>
+              <td class="team-members">${members}</td>
+              <td>${escapeHtml(t.manufacturer)}</td>
+              ${ops}
+            </tr>`;
+        })
+        .join("");
+    }
+
+    async function loadTeams() {
+      try {
+        const params = new URLSearchParams();
+        const name = document.getElementById("filter-team-name").value.trim();
+        const manufacturer = document.getElementById("filter-manufacturer").value.trim();
+        if (name) params.set("name", name);
+        if (manufacturer) params.set("manufacturer", manufacturer);
+        const result = await apiRequest(`${API}${params.size ? `?${params}` : ""}`);
+        renderRows(result.data || []);
+      } catch (err) {
+        if (err.status === 401) {
+          navigateSitePage("/login.html");
+          return;
+        }
+        tbody.innerHTML = `<tr><td colspan="${colSpan()}" class="empty">${escapeHtml(err.message)}</td></tr>`;
+        showToast(listToast, err.message, true);
+      }
+    }
+
+    async function init() {
+      currentUser = await requireLogin();
+      if (!currentUser) return;
+
+      isAdmin = currentUser.role === "admin";
+      document.getElementById("user-label").textContent = currentUser.username;
+      document.getElementById("role-tag").textContent = isAdmin ? "超级管理员" : "普通用户";
+      document.getElementById("page-desc").textContent = isAdmin
+        ? "管理员可对车队信息进行增删改查"
+        : "普通用户仅可查看车队信息";
+
+      if (isAdmin) {
+        addBtn.hidden = false;
+        document.getElementById("users-link").hidden = false;
+        document.getElementById("logs-link").hidden = false;
+      } else {
+        opsTh.hidden = true;
+      }
+
+      await loadTeams();
+    }
+
+    document.getElementById("logout-btn").addEventListener("click", () => logout());
+
+    manufacturerSortBtn.addEventListener("click", () => {
+      manufacturerSortDirection = manufacturerSortDirection === "asc" ? "desc" : "asc";
+      manufacturerSortBtn.querySelector(".sort-indicator").textContent =
+        manufacturerSortDirection === "asc" ? "↑" : "↓";
+      manufacturerSortBtn.setAttribute(
+        "aria-label",
+        manufacturerSortDirection === "asc"
+          ? "车辆制造商当前按首字母升序排列，点击切换为降序"
+          : "车辆制造商当前按首字母降序排列，点击切换为升序"
+      );
+      renderRows(currentTeams);
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!isAdmin) return;
+
+      const payload = getTeamFormData();
+      const id = teamIdInput.value;
+      if (id) payload.version = Number(teamVersionInput.value);
+      submitBtn.disabled = true;
+
+      try {
+        let successMessage;
+        if (id) {
+          await apiRequest(`${API}/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+          successMessage = "更新成功";
+        } else {
+          await apiRequest(API, { method: "POST", body: JSON.stringify(payload) });
+          successMessage = "添加成功";
+          clearTeamDraft();
+        }
+        await loadTeams();
+        closeModal(false);
+        showToast(listToast, successMessage);
+      } catch (err) {
+        if (err.status === 409) {
+          await loadTeams();
+          showToast(toast, `${err.message}，列表已刷新，请关闭窗口后重新编辑`, true);
+        } else {
+          showToast(toast, err.message, true);
+        }
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    addBtn.addEventListener("click", openCreateModal);
+    document.getElementById("team-filter-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      loadTeams();
+    });
+    document.getElementById("reset-filter-btn").addEventListener("click", () => {
+      document.getElementById("team-filter-form").reset();
+      loadTeams();
+    });
+    form.addEventListener("input", scheduleTeamDraftSave);
+    form.addEventListener("change", scheduleTeamDraftSave);
+    clearDraftBtn.addEventListener("click", () => {
+      if (!confirm("确认清空当前新增车队草稿吗？")) return;
+      clearTeamDraft();
+      resetForm();
+      showToast(toast, "草稿已清空");
+      teamNameInput.focus();
+    });
+    cancelBtn.addEventListener("click", () => closeModal());
+    modalCloseBtn.addEventListener("click", () => closeModal());
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) closeModal();
+    });
+    modal.addEventListener("cancel", () => {
+      if (!teamIdInput.value) saveTeamDraftNow();
+      resetForm();
+      showToast(toast, "");
+    });
+
+    tbody.addEventListener("click", async (e) => {
+      if (!isAdmin) return;
+
+      const editBtn = e.target.closest("[data-edit-id]");
+      const delBtn = e.target.closest("[data-id]");
+
+      if (editBtn) {
+        const t = teamsById.get(editBtn.getAttribute("data-edit-id"));
+        if (!t) return;
+        teamIdInput.value = t.id;
+        teamVersionInput.value = t.version;
+        teamNameInput.value = t.name;
+        manufacturerInput.value = t.manufacturer;
+        formTitle.textContent = "编辑车队";
+        submitBtn.textContent = "保存修改";
+        clearDraftBtn.hidden = true;
+        draftHint.hidden = true;
+        showToast(toast, "");
+        modal.showModal();
+        return;
+      }
+
+      if (delBtn) {
+        const id = delBtn.getAttribute("data-id");
+        if (!confirm("确认删除该车队吗？")) return;
+        try {
+          await apiRequest(`${API}/${id}`, { method: "DELETE" });
+          showToast(listToast, "删除成功");
+          if (teamIdInput.value === id) resetForm();
+          await loadTeams();
+        } catch (err) {
+          showToast(listToast, err.message, true);
+        }
+      }
+    });
+
+    init();
+  </script>
+</body>
+</html>

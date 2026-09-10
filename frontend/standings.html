@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MotoGP 车手积分榜</title>
+  <link rel="icon" type="image/jpeg" href="/assets/images/site-icon.jpg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/css/common.css" />
+</head>
+<body>
+  <div class="wrap standings-wrap">
+    <header class="page-header">
+      <div>
+        <h1>MotoGP <span>车手积分</span></h1>
+        <p id="standings-summary">正在加载积分榜…</p>
+      </div>
+      <div class="user-bar">
+        <nav class="nav-links">
+          <a href="/standings.html" class="active">车手积分</a>
+          <a href="/calendar.html">赛程日历</a>
+          <a href="/riders.html">车手信息</a>
+          <a href="/teams.html">车队信息</a>
+          <a href="/change-password.html">修改密码</a>
+          <a href="/users.html" id="users-link" hidden>账号管理</a>
+          <a href="/logs.html" id="logs-link" hidden>操作日志</a>
+        </nav>
+        <span id="user-label">加载中…</span>
+        <span class="role-tag" id="role-tag"></span>
+        <button type="button" class="btn-ghost" id="logout-btn">退出</button>
+      </div>
+    </header>
+
+    <dialog class="modal modal-sm" id="standing-modal">
+      <div class="modal-header">
+        <h2 id="standing-form-title">新增积分记录</h2>
+        <button type="button" class="modal-close" id="standing-modal-close" aria-label="关闭">×</button>
+      </div>
+      <form id="standing-form">
+        <input type="hidden" id="standing-id" />
+        <input type="hidden" id="standing-version" />
+        <div class="form-grid">
+          <div class="field">
+            <label for="standing-season">赛季年份</label>
+            <input id="standing-season" type="number" min="1949" max="2100" required />
+          </div>
+          <div class="field">
+            <label for="standing-rider">车手</label>
+            <select id="standing-rider" required></select>
+          </div>
+          <div class="field">
+            <label for="standing-position">排名</label>
+            <input id="standing-position" type="number" min="1" max="99" required />
+          </div>
+          <div class="field">
+            <label for="standing-points">积分</label>
+            <input id="standing-points" type="number" min="0" required />
+          </div>
+          <div class="field">
+            <label for="standing-wins">正赛胜场</label>
+            <input id="standing-wins" type="number" min="0" required />
+          </div>
+          <div class="field">
+            <label for="standing-podiums">正赛领奖台</label>
+            <input id="standing-podiums" type="number" min="0" required />
+          </div>
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn-primary" id="standing-submit-btn" style="width:auto">添加</button>
+          <button type="button" class="btn-ghost" id="standing-cancel-btn">取消</button>
+        </div>
+        <div class="toast" id="standing-form-toast"></div>
+      </form>
+    </dialog>
+
+    <section class="panel standings-panel">
+      <div class="panel-heading standings-heading">
+        <div class="standings-heading-left">
+          <h2>车手排行榜</h2>
+          <label class="season-picker">赛季
+            <select id="standing-season-select" aria-label="选择积分榜赛季"></select>
+          </label>
+        </div>
+        <div class="standings-admin-actions" id="standings-admin-actions" hidden>
+          <button type="button" class="btn-ghost" id="sync-standings-btn">刷新官方积分</button>
+          <button type="button" class="btn-primary btn-add" id="add-standing-btn">新增记录</button>
+        </div>
+      </div>
+      <div class="table-wrap standings-table-wrap">
+        <table class="standings-table">
+          <thead>
+            <tr>
+              <th>排名</th>
+              <th>车手编号</th>
+              <th>车手</th>
+              <th>所属车队</th>
+              <th>制造商</th>
+              <th>积分</th>
+              <th>正赛胜场</th>
+              <th>领奖台</th>
+              <th id="standing-ops-th">操作</th>
+            </tr>
+          </thead>
+          <tbody id="standings-tbody">
+            <tr><td colspan="9" class="empty">加载中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="toast" id="standings-toast"></div>
+      <p class="standings-source">初始数据来源：<a href="https://www.motogp.com/en/world-standing/2026/motogp/championship-standings" target="_blank" rel="noopener">MotoGP 官方 2026 车手积分榜</a>（更新于 2026-07-23）；仅展示系统中已存在的车手</p>
+    </section>
+  </div>
+
+  <script src="/assets/js/api.js"></script>
+  <script>
+    const STANDING_API = "/api/standings";
+    let currentUser = null;
+    let isAdmin = false;
+    let allStandings = [];
+    let localRiders = [];
+    let standingsById = new Map();
+    let selectedSeason = 2026;
+
+    const tbody = document.getElementById("standings-tbody");
+    const seasonSelect = document.getElementById("standing-season-select");
+    const modal = document.getElementById("standing-modal");
+    const form = document.getElementById("standing-form");
+    const formToast = document.getElementById("standing-form-toast");
+    const pageToast = document.getElementById("standings-toast");
+    const submitBtn = document.getElementById("standing-submit-btn");
+
+    function showToast(el, message, isError = false) {
+      el.textContent = message;
+      el.classList.toggle("error", isError);
+    }
+
+    function colSpan() {
+      return isAdmin ? 9 : 8;
+    }
+
+    function renderRows() {
+      const rows = allStandings
+        .filter((item) => item.season === selectedSeason)
+        .sort((a, b) => a.position - b.position || b.points - a.points);
+      standingsById = new Map(rows.map((item) => [String(item.id), item]));
+      document.getElementById("standings-summary").textContent = `${selectedSeason} 赛季 · ${rows.length} 名正式车手`;
+      if (!rows.length) {
+        tbody.innerHTML = `<tr><td colspan="${colSpan()}" class="empty">该赛季暂无积分记录</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = rows.map((item) => {
+        const rankClass = item.position <= 3 ? ` rank-${item.position}` : "";
+        const actions = isAdmin ? `<td><div class="row-actions">
+          <button type="button" class="btn-edit" data-edit-standing="${item.id}">编辑</button>
+          <button type="button" class="btn-danger" data-delete-standing="${item.id}">删除</button>
+        </div></td>` : "";
+        return `<tr class="${rankClass}">
+          <td><span class="standing-rank">${item.position}</span></td>
+          <td><span class="standing-number">#${escapeHtml(item.rider_number)}</span></td>
+          <td class="standing-rider-name"><strong>${escapeHtml(item.english_name)}</strong><small>${escapeHtml(item.chinese_name)}</small></td>
+          <td>${escapeHtml(item.team_name || "未分配")}</td>
+          <td>${escapeHtml(item.manufacturer || "-")}</td>
+          <td><strong class="standing-points">${item.points}</strong></td>
+          <td>${item.race_wins}</td>
+          <td>${item.podiums}</td>
+          ${actions}
+        </tr>`;
+      }).join("");
+    }
+
+    function renderSeasonOptions(preferred = selectedSeason) {
+      const seasons = [...new Set(allStandings.map((item) => item.season))].sort((a, b) => b - a);
+      selectedSeason = seasons.includes(Number(preferred)) ? Number(preferred) : (seasons[0] || 2026);
+      seasonSelect.innerHTML = seasons.length
+        ? seasons.map((year) => `<option value="${year}" ${year === selectedSeason ? "selected" : ""}>${year}</option>`).join("")
+        : `<option value="${selectedSeason}">${selectedSeason}</option>`;
+    }
+
+    function renderRiderOptions(selectedId = "") {
+      document.getElementById("standing-rider").innerHTML =
+        '<option value="">请选择车手</option>' +
+        [...localRiders]
+          .sort((a, b) => Number(a.rider_number) - Number(b.rider_number))
+          .map((rider) => `<option value="${rider.id}" ${String(rider.id) === String(selectedId) ? "selected" : ""}>#${escapeHtml(rider.rider_number)} ${escapeHtml(rider.english_name)}</option>`)
+          .join("");
+    }
+
+    async function loadData(preferredSeason = selectedSeason) {
+      try {
+        const [standingResult, riderResult] = await Promise.all([
+          apiRequest(STANDING_API),
+          apiRequest("/api/riders"),
+        ]);
+        allStandings = standingResult.data || [];
+        localRiders = riderResult.data || [];
+        renderSeasonOptions(preferredSeason);
+        renderRiderOptions();
+        renderRows();
+        showToast(pageToast, "");
+      } catch (err) {
+        if (err.status === 401) return navigateSitePage("/login.html");
+        tbody.innerHTML = `<tr><td colspan="${colSpan()}" class="empty">${escapeHtml(err.message)}</td></tr>`;
+        showToast(pageToast, err.message, true);
+      }
+    }
+
+    function resetForm() {
+      form.reset();
+      document.getElementById("standing-id").value = "";
+      document.getElementById("standing-version").value = "";
+      document.getElementById("standing-season").value = selectedSeason;
+      document.getElementById("standing-wins").value = 0;
+      document.getElementById("standing-podiums").value = 0;
+      renderRiderOptions();
+      document.getElementById("standing-form-title").textContent = "新增积分记录";
+      submitBtn.textContent = "添加";
+      showToast(formToast, "");
+    }
+
+    function closeModal() {
+      if (modal.open) modal.close();
+      resetForm();
+    }
+
+    function openEdit(item) {
+      resetForm();
+      document.getElementById("standing-id").value = item.id;
+      document.getElementById("standing-version").value = item.version;
+      document.getElementById("standing-season").value = item.season;
+      renderRiderOptions(item.rider_id);
+      document.getElementById("standing-position").value = item.position;
+      document.getElementById("standing-points").value = item.points;
+      document.getElementById("standing-wins").value = item.race_wins;
+      document.getElementById("standing-podiums").value = item.podiums;
+      document.getElementById("standing-form-title").textContent = "编辑积分记录";
+      submitBtn.textContent = "保存修改";
+      modal.showModal();
+    }
+
+    function payload() {
+      return {
+        season: Number(document.getElementById("standing-season").value),
+        rider_id: Number(document.getElementById("standing-rider").value),
+        position: Number(document.getElementById("standing-position").value),
+        points: Number(document.getElementById("standing-points").value),
+        race_wins: Number(document.getElementById("standing-wins").value),
+        podiums: Number(document.getElementById("standing-podiums").value),
+      };
+    }
+
+    async function init() {
+      currentUser = await requireLogin();
+      if (!currentUser) return;
+      isAdmin = currentUser.role === "admin";
+      document.getElementById("user-label").textContent = currentUser.username;
+      document.getElementById("role-tag").textContent = isAdmin ? "超级管理员" : "普通用户";
+      document.getElementById("users-link").hidden = !isAdmin;
+      document.getElementById("logs-link").hidden = !isAdmin;
+      document.getElementById("standings-admin-actions").hidden = !isAdmin;
+      if (!isAdmin) document.getElementById("standing-ops-th").hidden = true;
+      await loadData();
+    }
+
+    seasonSelect.addEventListener("change", () => {
+      selectedSeason = Number(seasonSelect.value);
+      renderRows();
+    });
+    document.getElementById("add-standing-btn").addEventListener("click", () => {
+      resetForm();
+      modal.showModal();
+    });
+    document.getElementById("sync-standings-btn").addEventListener("click", async () => {
+      if (!isAdmin) return;
+      if (!confirm(`确认从 MotoGP 官方接口刷新 ${selectedSeason} 赛季积分吗？本地积分将按车手编号更新，系统中不存在的替补车手会被跳过。`)) return;
+      const button = document.getElementById("sync-standings-btn");
+      const originalText = button.textContent;
+      button.disabled = true;
+      button.textContent = "正在同步…";
+      showToast(pageToast, "正在连接 MotoGP 官方接口…");
+      try {
+        const result = await apiRequest(`${STANDING_API}/sync`, {
+          method: "POST",
+          body: JSON.stringify({ season: selectedSeason }),
+        });
+        const summary = result.data || {};
+        await loadData(selectedSeason);
+        const skipped = summary.skipped || [];
+        const skippedText = skipped.length
+          ? `；跳过 ${skipped.length} 名非本地车手：${skipped.map((item) => item.official_name || `#${item.rider_number}`).join("、")}`
+          : "";
+        showToast(
+          pageToast,
+          `同步完成：匹配 ${summary.matched || 0} 名，更新 ${summary.updated || 0} 条，新增 ${summary.created || 0} 条，未变化 ${summary.unchanged || 0} 条${skippedText}`
+        );
+      } catch (err) {
+        showToast(pageToast, err.message, true);
+      } finally {
+        button.disabled = false;
+        button.textContent = originalText;
+      }
+    });
+    document.getElementById("standing-modal-close").addEventListener("click", closeModal);
+    document.getElementById("standing-cancel-btn").addEventListener("click", closeModal);
+    modal.addEventListener("click", (event) => { if (event.target === modal) closeModal(); });
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!isAdmin) return;
+      const id = document.getElementById("standing-id").value;
+      const data = payload();
+      if (id) data.version = Number(document.getElementById("standing-version").value);
+      submitBtn.disabled = true;
+      try {
+        await apiRequest(id ? `${STANDING_API}/${id}` : STANDING_API, {
+          method: id ? "PUT" : "POST",
+          body: JSON.stringify(data),
+        });
+        closeModal();
+        await loadData(data.season);
+        showToast(pageToast, id ? "积分记录修改成功" : "积分记录添加成功");
+      } catch (err) {
+        if (err.status === 409) {
+          await loadData(data.season);
+          showToast(formToast, `${err.message}，请关闭窗口后重新编辑`, true);
+        } else {
+          showToast(formToast, err.message, true);
+        }
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    tbody.addEventListener("click", async (event) => {
+      if (!isAdmin) return;
+      const editBtn = event.target.closest("[data-edit-standing]");
+      const deleteBtn = event.target.closest("[data-delete-standing]");
+      if (editBtn) {
+        const item = standingsById.get(editBtn.dataset.editStanding);
+        if (item) openEdit(item);
+        return;
+      }
+      if (deleteBtn) {
+        const item = standingsById.get(deleteBtn.dataset.deleteStanding);
+        if (!item || !confirm(`确认删除 ${item.english_name} 的 ${item.season} 赛季积分记录吗？`)) return;
+        try {
+          await apiRequest(`${STANDING_API}/${item.id}`, { method: "DELETE" });
+          await loadData(item.season);
+          showToast(pageToast, "积分记录已删除");
+        } catch (err) {
+          showToast(pageToast, err.message, true);
+        }
+      }
+    });
+
+    document.getElementById("logout-btn").addEventListener("click", () => logout());
+    init();
+  </script>
+</body>
+</html>

@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MotoGP 赛程日历</title>
+  <link rel="icon" type="image/jpeg" href="/assets/images/site-icon.jpg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/css/common.css" />
+</head>
+<body>
+  <div class="wrap calendar-wrap">
+    <header class="page-header">
+      <div>
+        <h1>MotoGP <span>赛程日历</span></h1>
+        <p id="calendar-summary">正在加载赛程…</p>
+      </div>
+      <div class="user-bar">
+        <nav class="nav-links">
+          <a href="/standings.html">车手积分</a>
+          <a href="/calendar.html" class="active">赛程日历</a>
+          <a href="/riders.html">车手信息</a>
+          <a href="/teams.html">车队信息</a>
+          <a href="/change-password.html">修改密码</a>
+          <a href="/users.html" id="users-link" hidden>账号管理</a>
+          <a href="/logs.html" id="logs-link" hidden>操作日志</a>
+        </nav>
+        <span id="user-label">加载中…</span>
+        <span class="role-tag" id="role-tag"></span>
+        <button type="button" class="btn-ghost" id="logout-btn">退出</button>
+      </div>
+    </header>
+
+    <dialog class="modal" id="race-modal">
+      <div class="modal-header">
+        <h2 id="race-form-title">新增赛程</h2>
+        <button type="button" class="modal-close" id="race-modal-close" aria-label="关闭">×</button>
+      </div>
+      <form id="race-form">
+        <input type="hidden" id="race-id" />
+        <input type="hidden" id="race-version" />
+        <div class="form-grid-4">
+          <div class="field">
+            <label for="race-season">赛季年份</label>
+            <input id="race-season" type="number" min="1949" max="2100" required />
+          </div>
+          <div class="field">
+            <label for="race-round">分站序号</label>
+            <input id="race-round" type="number" min="1" max="99" required />
+          </div>
+          <div class="field">
+            <label for="race-flag">旗帜</label>
+            <input id="race-flag" maxlength="16" required placeholder="🇨🇳" />
+          </div>
+          <div class="field">
+            <label for="race-country">国家或地区</label>
+            <input id="race-country" maxlength="64" required placeholder="中国" />
+          </div>
+          <div class="field">
+            <label for="race-country-en">英文名称</label>
+            <input id="race-country-en" maxlength="64" required placeholder="CHINA" />
+          </div>
+          <div class="field">
+            <label for="race-start-date">开始日期</label>
+            <input id="race-start-date" type="date" required />
+          </div>
+          <div class="field">
+            <label for="race-end-date">结束日期</label>
+            <input id="race-end-date" type="date" required />
+          </div>
+          <div class="field">
+            <label for="race-circuit">赛道名称</label>
+            <input id="race-circuit" maxlength="128" required placeholder="上海国际赛车场" />
+          </div>
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn-primary" id="race-submit-btn" style="width:auto">添加</button>
+          <button type="button" class="btn-ghost" id="race-cancel-btn">取消</button>
+        </div>
+        <div class="toast" id="race-form-toast"></div>
+      </form>
+    </dialog>
+
+    <dialog class="modal race-schedule-modal" id="race-schedule-modal">
+      <div class="modal-header">
+        <div>
+          <h2 id="schedule-title">分站比赛日程</h2>
+          <p class="results-subtitle" id="schedule-subtitle"></p>
+        </div>
+        <button type="button" class="modal-close" id="schedule-modal-close" aria-label="关闭">×</button>
+      </div>
+      <div class="schedule-local-time-note">以下时间均为北京时间（UTC+8）</div>
+      <div id="schedule-view">
+        <div class="calendar-empty">正在加载日程…</div>
+      </div>
+      <div class="schedule-admin-actions" id="schedule-admin-actions" hidden>
+        <button type="button" class="btn-edit" id="edit-schedule-btn">编辑日程</button>
+      </div>
+      <form id="schedule-editor" hidden>
+        <div class="result-editor-heading">
+          <p>可录入 MotoGP、Moto2、Moto3 等组别，系统会按日期和开始时间排列。</p>
+          <button type="button" class="btn-ghost" id="add-schedule-row-btn">添加环节</button>
+        </div>
+        <div class="schedule-editor-list" id="schedule-editor-list"></div>
+        <div class="actions">
+          <button type="submit" class="btn-primary" id="save-schedule-btn" style="width:auto">保存日程</button>
+          <button type="button" class="btn-ghost" id="cancel-schedule-btn">取消编辑</button>
+        </div>
+      </form>
+      <div class="toast" id="schedule-toast" role="status" aria-live="polite"></div>
+    </dialog>
+
+    <dialog class="modal race-results-modal" id="race-results-modal">
+      <div class="modal-header">
+        <div>
+          <h2 id="results-title">分站排名</h2>
+          <p class="results-subtitle" id="results-subtitle"></p>
+        </div>
+        <button type="button" class="modal-close" id="results-modal-close" aria-label="关闭">×</button>
+      </div>
+      <div class="result-tabs" role="tablist" aria-label="比赛类型">
+        <button type="button" class="active" data-result-tab="sprint" role="tab" aria-selected="true">冲刺赛</button>
+        <button type="button" data-result-tab="race" role="tab" aria-selected="false">正赛</button>
+      </div>
+      <div id="results-view">
+        <div class="calendar-empty">正在加载排名…</div>
+      </div>
+      <div class="results-admin-actions" id="results-admin-actions" hidden>
+        <span class="results-sync-hint" id="results-sync-hint">每个分站每 1 小时可同步一次</span>
+        <button type="button" class="btn-primary" id="sync-results-btn">从官网刷新</button>
+        <button type="button" class="btn-edit" id="edit-results-btn">编辑当前排名</button>
+      </div>
+      <form id="results-editor" hidden>
+        <div class="result-editor-heading">
+          <p>按实际完赛名次添加车手，积分可填写 0。</p>
+          <button type="button" class="btn-ghost" id="add-result-row-btn">添加车手</button>
+        </div>
+        <div class="result-editor-list" id="result-editor-list"></div>
+        <div class="actions">
+          <button type="submit" class="btn-primary" id="save-results-btn" style="width:auto">保存排名</button>
+          <button type="button" class="btn-ghost" id="cancel-results-btn">取消编辑</button>
+        </div>
+      </form>
+      <div class="toast" id="results-toast" role="status" aria-live="polite"></div>
+    </dialog>
+
+    <section class="calendar-panel">
+      <div class="calendar-toolbar">
+        <div class="calendar-toolbar-main">
+          <div class="calendar-view-switch" aria-label="赛程展示方式">
+            <button type="button" class="active" aria-pressed="true">▦ GRID VIEW</button>
+          </div>
+          <label class="season-picker">赛季
+            <select id="season-select" aria-label="选择赛季"></select>
+          </label>
+        </div>
+        <div class="calendar-toolbar-side">
+          <div class="calendar-legend">
+            <span><i class="legend-dot finished"></i>已结束</span>
+            <span><i class="legend-dot next"></i>下一站</span>
+            <span><i class="legend-dot upcoming"></i>待开始</span>
+          </div>
+          <button type="button" class="btn-primary calendar-add-btn" id="add-race-btn" hidden>新增赛程</button>
+        </div>
+      </div>
+      <div class="race-grid" id="race-grid" aria-live="polite">
+        <div class="calendar-empty">正在加载赛程…</div>
+      </div>
+      <div class="toast" id="calendar-toast"></div>
+      <p class="calendar-source">赛程数据由系统管理员维护，比赛状态根据当前日期自动计算</p>
+    </section>
+  </div>
+
+  <script src="/assets/js/api.js"></script>
+  <script>
+    const RACE_API = "/api/races";
+    const RIDER_API = "/api/riders";
+    let currentUser = null;
+    let isAdmin = false;
+    let allEvents = [];
+    let eventsById = new Map();
+    let selectedSeason = null;
+    let selectedResultRace = null;
+    let selectedResultType = "sprint";
+    let resultData = null;
+    let selectedScheduleRace = null;
+    let scheduleData = null;
+    let allRiders = [];
+
+    const grid = document.getElementById("race-grid");
+    const seasonSelect = document.getElementById("season-select");
+    const modal = document.getElementById("race-modal");
+    const form = document.getElementById("race-form");
+    const formToast = document.getElementById("race-form-toast");
+    const calendarToast = document.getElementById("calendar-toast");
+    const submitBtn = document.getElementById("race-submit-btn");
+    const scheduleModal = document.getElementById("race-schedule-modal");
+    const scheduleView = document.getElementById("schedule-view");
+    const scheduleEditor = document.getElementById("schedule-editor");
+    const scheduleEditorList = document.getElementById("schedule-editor-list");
+    const scheduleToast = document.getElementById("schedule-toast");
+    const resultsModal = document.getElementById("race-results-modal");
+    const resultsView = document.getElementById("results-view");
+    const resultsEditor = document.getElementById("results-editor");
+    const resultEditorList = document.getElementById("result-editor-list");
+    const resultsToast = document.getElementById("results-toast");
+    const syncResultsButton = document.getElementById("sync-results-btn");
+
+    function showToast(el, message, isError = false) {
+      el.textContent = message;
+      el.classList.toggle("error", isError);
+    }
+
+    function localDate(iso, endOfDay = false) {
+      return new Date(`${iso}T${endOfDay ? "23:59:59" : "00:00:00"}`);
+    }
+
+    function formatDateRange(startDate, endDate) {
+      const format = (iso) => {
+        const [year, month, day] = iso.split("-");
+        return `${month}月${day}日`;
+      };
+      return `${format(startDate)} - ${format(endDate)}`;
+    }
+
+    function shiftIsoDate(iso, days) {
+      const value = new Date(`${iso}T00:00:00Z`);
+      value.setUTCDate(value.getUTCDate() + days);
+      return value.toISOString().slice(0, 10);
+    }
+
+    function getStatuses(events) {
+      const now = new Date();
+      const firstFuture = events.findIndex((event) => now < localDate(event.start_date));
+      return events.map((event, index) => {
+        if (now > localDate(event.end_date, true)) return { key: "finished", label: "已结束" };
+        if (now >= localDate(event.start_date)) return { key: "live", label: "进行中" };
+        if (index === firstFuture) return { key: "next", label: "下一站" };
+        return { key: "upcoming", label: "待开始" };
+      });
+    }
+
+    function renderCalendar() {
+      const events = allEvents
+        .filter((event) => event.season === selectedSeason)
+        .sort((a, b) => a.round_number - b.round_number);
+      eventsById = new Map(events.map((event) => [String(event.id), event]));
+      document.getElementById("calendar-summary").textContent = `${selectedSeason || "--"} 赛季 · ${events.length} 场大奖赛`;
+      if (!events.length) {
+        grid.innerHTML = '<div class="calendar-empty">该赛季暂无赛程数据</div>';
+        return;
+      }
+      const statuses = getStatuses(events);
+      grid.innerHTML = events.map((event, index) => {
+        const status = statuses[index];
+        const resultAction = status.key === "finished"
+          ? `<button type="button" class="btn-result" data-view-results="${event.id}">查看排名</button>`
+          : "";
+        const adminActions = isAdmin ? `
+            <button type="button" class="btn-edit" data-edit-race="${event.id}">编辑</button>
+            <button type="button" class="btn-danger" data-delete-race="${event.id}">删除</button>` : "";
+        const actions = resultAction || adminActions ? `
+          <div class="race-card-actions">
+            ${resultAction}${adminActions}
+          </div>` : "";
+        return `
+          <article class="race-card ${status.key}" data-view-schedule="${event.id}" tabindex="0"
+                   aria-label="查看${escapeHtml(event.country)}大奖赛比赛日程">
+            <div class="race-status">${status.label}</div>
+            <div class="race-card-top">
+              <span class="race-flag" role="img" aria-label="${escapeHtml(event.country)}旗帜">${escapeHtml(event.flag)}</span>
+              <span class="race-round">ROUND ${String(event.round_number).padStart(2, "0")}</span>
+            </div>
+            <time datetime="${event.start_date}" class="race-date">${formatDateRange(event.start_date, event.end_date)}</time>
+            <h2><span>${event.round_number}</span> ${escapeHtml(event.country)}</h2>
+            <div class="race-country-en">${escapeHtml(event.country_en)}</div>
+            <p class="race-circuit">${escapeHtml(event.circuit)}</p>
+            <span class="race-card-schedule-hint">查看比赛日程 <b>→</b></span>
+            ${actions}
+          </article>`;
+      }).join("");
+    }
+
+    function renderSeasonOptions(preferredSeason = selectedSeason) {
+      const seasons = [...new Set(allEvents.map((event) => event.season))].sort((a, b) => b - a);
+      const currentYear = new Date().getFullYear();
+      selectedSeason = seasons.includes(Number(preferredSeason))
+        ? Number(preferredSeason)
+        : (seasons.includes(currentYear) ? currentYear : (seasons[0] || currentYear));
+      seasonSelect.innerHTML = seasons.length
+        ? seasons.map((season) => `<option value="${season}" ${season === selectedSeason ? "selected" : ""}>${season}</option>`).join("")
+        : `<option value="${selectedSeason}">${selectedSeason}</option>`;
+    }
+
+    async function loadEvents(preferredSeason = selectedSeason) {
+      try {
+        const result = await apiRequest(RACE_API);
+        allEvents = result.data || [];
+        renderSeasonOptions(preferredSeason);
+        renderCalendar();
+        showToast(calendarToast, "");
+      } catch (err) {
+        if (err.status === 401) return navigateSitePage("/login.html");
+        grid.innerHTML = `<div class="calendar-empty">${escapeHtml(err.message)}</div>`;
+        showToast(calendarToast, err.message, true);
+      }
+    }
+
+    function formatScheduleDay(iso) {
+      return new Intl.DateTimeFormat("zh-CN", {
+        month: "long",
+        day: "numeric",
+        weekday: "long",
+      }).format(localDate(iso));
+    }
+
+    function renderSchedule() {
+      if (!scheduleData) return;
+      const items = scheduleData.items || [];
+      scheduleEditor.hidden = true;
+      document.getElementById("schedule-admin-actions").hidden = !isAdmin;
+      if (!items.length) {
+        scheduleView.innerHTML = `<div class="schedule-empty">该分站暂未录入具体日程${isAdmin ? "，可点击下方按钮添加" : ""}</div>`;
+        return;
+      }
+      const days = items.reduce((groups, item) => {
+        (groups[item.schedule_date] ||= []).push(item);
+        return groups;
+      }, {});
+      scheduleView.innerHTML = `<div class="schedule-days">${Object.entries(days).map(([day, rows]) => `
+        <section class="schedule-day">
+          <header>
+            <time datetime="${day}">${escapeHtml(formatScheduleDay(day))}</time>
+            <span>${rows.length} 个环节</span>
+          </header>
+          <div class="schedule-sessions">${rows.map((row) => `
+            <div class="schedule-session">
+              <time class="schedule-session-time" datetime="${row.start_time}">
+                ${escapeHtml(row.start_time)}${row.end_time ? `<small>— ${escapeHtml(row.end_time)}</small>` : ""}
+              </time>
+              <span class="schedule-category">${escapeHtml(row.category)}</span>
+              <strong>${escapeHtml(row.session_name)}</strong>
+            </div>`).join("")}
+          </div>
+        </section>`).join("")}</div>`;
+    }
+
+    async function openScheduleModal(race) {
+      selectedScheduleRace = race;
+      scheduleData = null;
+      document.getElementById("schedule-title").textContent = `${race.flag} ${race.country}大奖赛日程`;
+      document.getElementById("schedule-subtitle").textContent =
+        `${race.season} 赛季 · 第 ${race.round_number} 站 · ${race.circuit}`;
+      scheduleView.innerHTML = '<div class="schedule-empty">正在加载日程…</div>';
+      scheduleEditor.hidden = true;
+      document.getElementById("schedule-admin-actions").hidden = true;
+      showToast(scheduleToast, "");
+      scheduleModal.showModal();
+      try {
+        const response = await apiRequest(`${RACE_API}/${race.id}/schedule`);
+        scheduleData = response.data;
+        renderSchedule();
+      } catch (err) {
+        scheduleView.innerHTML = `<div class="schedule-empty">${escapeHtml(err.message)}</div>`;
+        showToast(scheduleToast, err.message, true);
+      }
+    }
+
+    function addScheduleEditorRow(item = {}) {
+      if (!selectedScheduleRace) return;
+      const row = document.createElement("div");
+      row.className = "schedule-editor-row";
+      row.innerHTML = `
+        <label>日期<input type="date" class="schedule-date-input" required
+          min="${shiftIsoDate(selectedScheduleRace.start_date, -1)}" max="${shiftIsoDate(selectedScheduleRace.end_date, 1)}"
+          value="${item.schedule_date || selectedScheduleRace.start_date}" /></label>
+        <label>开始<input type="time" class="schedule-start-input" required value="${item.start_time || ""}" /></label>
+        <label>结束<input type="time" class="schedule-end-input" value="${item.end_time || ""}" /></label>
+        <label>组别<input class="schedule-category-input" maxlength="32" required
+          value="${escapeHtml(item.category || "MotoGP")}" placeholder="MotoGP" /></label>
+        <label class="schedule-name-field">环节名称<input class="schedule-name-input" maxlength="128" required
+          value="${escapeHtml(item.session_name || "")}" placeholder="例如：自由练习、排位赛、冲刺赛、正赛" /></label>
+        <button type="button" class="btn-danger schedule-row-remove" aria-label="删除该环节">删除</button>`;
+      scheduleEditorList.appendChild(row);
+    }
+
+    function openScheduleEditor() {
+      if (!isAdmin || !scheduleData) return;
+      scheduleEditorList.innerHTML = "";
+      (scheduleData.items || []).forEach(addScheduleEditorRow);
+      if (!(scheduleData.items || []).length) addScheduleEditorRow();
+      scheduleView.innerHTML = "";
+      document.getElementById("schedule-admin-actions").hidden = true;
+      scheduleEditor.hidden = false;
+      showToast(scheduleToast, "");
+    }
+
+    function resultTypeLabel(type = selectedResultType) {
+      return type === "sprint" ? "冲刺赛" : "正赛";
+    }
+
+    function formatCooldown(seconds) {
+      if (seconds >= 3600 && seconds % 3600 === 0) return `${seconds / 3600} 小时`;
+      if (seconds >= 60) return `${Math.ceil(seconds / 60)} 分钟`;
+      return `${seconds} 秒`;
+    }
+
+    function setResultTab(type) {
+      selectedResultType = type;
+      document.querySelectorAll("[data-result-tab]").forEach((button) => {
+        const active = button.dataset.resultTab === type;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", String(active));
+      });
+      resultsEditor.hidden = true;
+      document.getElementById("results-admin-actions").hidden = !isAdmin || !resultData;
+      renderResults();
+    }
+
+    function renderResults() {
+      if (!resultData) return;
+      const rows = resultData[selectedResultType] || [];
+      if (!rows.length) {
+        resultsView.innerHTML = `<div class="results-empty">暂未录入${resultTypeLabel()}排名</div>`;
+        return;
+      }
+      resultsView.innerHTML = `
+        <div class="race-result-table-wrap">
+          <table class="race-result-table">
+            <thead><tr><th>排名</th><th>车手编号</th><th>车手</th><th>车队</th><th>完赛时间 / 状态</th><th>积分</th></tr></thead>
+            <tbody>${rows.map((row) => `
+              <tr class="${row.result_status === "DNF" ? "result-dnf" : `result-rank-${row.position}`}">
+                <td><strong class="result-position">${row.position ?? "DNF"}</strong></td>
+                <td><span class="result-number">#${escapeHtml(row.rider_number)}</span></td>
+                <td><strong>${escapeHtml(row.chinese_name)}</strong><small>${escapeHtml(row.english_name)}</small></td>
+                <td>${escapeHtml(row.team_name || "未分配")}</td>
+                <td>${row.result_status === "DNF"
+                  ? `<span class="result-dnf-label">${row.remaining_laps != null ? `剩余 ${row.remaining_laps} 圈` : "DNF"}</span>`
+                  : escapeHtml(row.finish_time || "—")}</td>
+                <td><strong>${row.points}</strong></td>
+              </tr>`).join("")}</tbody>
+          </table>
+        </div>`;
+    }
+
+    async function openResultsModal(race) {
+      selectedResultRace = race;
+      selectedResultType = "sprint";
+      resultData = null;
+      document.getElementById("results-title").textContent = `${race.flag} ${race.country}大奖赛排名`;
+      document.getElementById("results-subtitle").textContent = `${race.season} 赛季 · 第 ${race.round_number} 站 · ${race.circuit}`;
+      resultsView.innerHTML = '<div class="results-empty">正在加载排名…</div>';
+      resultsEditor.hidden = true;
+      document.getElementById("results-admin-actions").hidden = true;
+      showToast(resultsToast, "");
+      resultsModal.showModal();
+      try {
+        const response = await apiRequest(`${RACE_API}/${race.id}/results`);
+        resultData = response.data;
+        document.getElementById("results-sync-hint").textContent =
+          `每个分站每 ${formatCooldown(resultData.sync_cooldown_seconds || 3600)}可同步一次`;
+        setResultTab("sprint");
+      } catch (err) {
+        resultsView.innerHTML = `<div class="results-empty">${escapeHtml(err.message)}</div>`;
+        showToast(resultsToast, err.message, true);
+      }
+    }
+
+    async function ensureRidersLoaded() {
+      if (allRiders.length) return;
+      const response = await apiRequest(RIDER_API);
+      allRiders = (response.data || []).sort((a, b) => {
+        const aNumber = Number(a.rider_number);
+        const bNumber = Number(b.rider_number);
+        if (Number.isFinite(aNumber) && Number.isFinite(bNumber)) return aNumber - bNumber;
+        return String(a.rider_number).localeCompare(String(b.rider_number));
+      });
+    }
+
+    function riderOptions(selectedId) {
+      return `<option value="">请选择车手</option>${allRiders.map((rider) => `
+        <option value="${rider.id}" ${Number(selectedId) === Number(rider.id) ? "selected" : ""}>
+          ${escapeHtml(rider.rider_number)} ${escapeHtml(rider.chinese_name)} · ${escapeHtml(rider.english_name)}
+        </option>`).join("")}`;
+    }
+
+    function addResultEditorRow(row = {}) {
+      const item = document.createElement("div");
+      item.className = "result-editor-row";
+      item.innerHTML = `
+        <label>排名<input type="number" class="result-position-input" min="1" max="99" value="${row.position ?? resultEditorList.children.length + 1}" /></label>
+        <label class="result-rider-field">车手<select class="result-rider-input" required>${riderOptions(row.rider_id)}</select></label>
+        <label>积分<input type="number" class="result-points-input" min="0" max="100" required value="${row.points ?? 0}" /></label>
+        <label>状态<select class="result-status-input"><option value="FINISHED" ${row.result_status !== "DNF" ? "selected" : ""}>完赛</option><option value="DNF" ${row.result_status === "DNF" ? "selected" : ""}>DNF</option></select></label>
+        <label>用时<input class="result-time-input" maxlength="32" value="${escapeHtml(row.finish_time || "")}" placeholder="39:36.270" /></label>
+        <label>剩余圈数<input type="number" class="result-laps-input" min="0" max="999" value="${row.remaining_laps ?? ""}" /></label>
+        <button type="button" class="btn-danger result-row-remove" aria-label="删除该车手">删除</button>`;
+      resultEditorList.appendChild(item);
+      updateResultEditorRow(item);
+    }
+
+    function updateResultEditorRow(item) {
+      const isDnf = item.querySelector(".result-status-input").value === "DNF";
+      const position = item.querySelector(".result-position-input");
+      const remaining = item.querySelector(".result-laps-input");
+      position.disabled = isDnf;
+      position.required = !isDnf;
+      if (isDnf) position.value = "";
+      remaining.disabled = !isDnf;
+      if (!isDnf) remaining.value = "";
+    }
+
+    async function openResultsEditor() {
+      if (!resultData) return;
+      try {
+        await ensureRidersLoaded();
+        resultEditorList.innerHTML = "";
+        const rows = resultData[selectedResultType] || [];
+        rows.forEach(addResultEditorRow);
+        if (!rows.length) addResultEditorRow();
+        resultsView.innerHTML = "";
+        document.getElementById("results-admin-actions").hidden = true;
+        resultsEditor.hidden = false;
+        showToast(resultsToast, "");
+      } catch (err) {
+        showToast(resultsToast, err.message, true);
+      }
+    }
+
+    function resetForm() {
+      form.reset();
+      document.getElementById("race-id").value = "";
+      document.getElementById("race-version").value = "";
+      document.getElementById("race-season").value = selectedSeason || new Date().getFullYear();
+      document.getElementById("race-flag").value = "🏁";
+      document.getElementById("race-form-title").textContent = "新增赛程";
+      submitBtn.textContent = "添加";
+      showToast(formToast, "");
+    }
+
+    function openCreateModal() {
+      resetForm();
+      modal.showModal();
+      document.getElementById("race-round").focus();
+    }
+
+    function openEditModal(event) {
+      resetForm();
+      document.getElementById("race-id").value = event.id;
+      document.getElementById("race-version").value = event.version;
+      document.getElementById("race-season").value = event.season;
+      document.getElementById("race-round").value = event.round_number;
+      document.getElementById("race-flag").value = event.flag;
+      document.getElementById("race-country").value = event.country;
+      document.getElementById("race-country-en").value = event.country_en;
+      document.getElementById("race-start-date").value = event.start_date;
+      document.getElementById("race-end-date").value = event.end_date;
+      document.getElementById("race-circuit").value = event.circuit;
+      document.getElementById("race-form-title").textContent = "编辑赛程";
+      submitBtn.textContent = "保存修改";
+      modal.showModal();
+    }
+
+    function closeModal() {
+      if (modal.open) modal.close();
+      resetForm();
+    }
+
+    function getPayload() {
+      return {
+        season: Number(document.getElementById("race-season").value),
+        round_number: Number(document.getElementById("race-round").value),
+        flag: document.getElementById("race-flag").value.trim(),
+        country: document.getElementById("race-country").value.trim(),
+        country_en: document.getElementById("race-country-en").value.trim(),
+        start_date: document.getElementById("race-start-date").value,
+        end_date: document.getElementById("race-end-date").value,
+        circuit: document.getElementById("race-circuit").value.trim(),
+      };
+    }
+
+    async function init() {
+      currentUser = await requireLogin();
+      if (!currentUser) return;
+      isAdmin = currentUser.role === "admin";
+      document.getElementById("user-label").textContent = currentUser.username;
+      document.getElementById("role-tag").textContent = isAdmin ? "超级管理员" : "普通用户";
+      document.getElementById("users-link").hidden = !isAdmin;
+      document.getElementById("logs-link").hidden = !isAdmin;
+      document.getElementById("add-race-btn").hidden = !isAdmin;
+      await loadEvents();
+    }
+
+    seasonSelect.addEventListener("change", () => {
+      selectedSeason = Number(seasonSelect.value);
+      renderCalendar();
+    });
+    document.getElementById("add-race-btn").addEventListener("click", openCreateModal);
+    document.getElementById("race-modal-close").addEventListener("click", closeModal);
+    document.getElementById("race-cancel-btn").addEventListener("click", closeModal);
+    modal.addEventListener("click", (event) => { if (event.target === modal) closeModal(); });
+    document.getElementById("schedule-modal-close").addEventListener("click", () => scheduleModal.close());
+    scheduleModal.addEventListener("click", (event) => { if (event.target === scheduleModal) scheduleModal.close(); });
+    document.getElementById("edit-schedule-btn").addEventListener("click", openScheduleEditor);
+    document.getElementById("add-schedule-row-btn").addEventListener("click", () => addScheduleEditorRow());
+    document.getElementById("cancel-schedule-btn").addEventListener("click", renderSchedule);
+    scheduleEditorList.addEventListener("click", (event) => {
+      const removeButton = event.target.closest(".schedule-row-remove");
+      if (removeButton) removeButton.closest(".schedule-editor-row").remove();
+    });
+    scheduleEditor.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!isAdmin || !selectedScheduleRace || !scheduleData) return;
+      const items = [...scheduleEditorList.querySelectorAll(".schedule-editor-row")].map((row) => ({
+        schedule_date: row.querySelector(".schedule-date-input").value,
+        start_time: row.querySelector(".schedule-start-input").value,
+        end_time: row.querySelector(".schedule-end-input").value,
+        category: row.querySelector(".schedule-category-input").value.trim(),
+        session_name: row.querySelector(".schedule-name-input").value.trim(),
+      }));
+      const saveButton = document.getElementById("save-schedule-btn");
+      saveButton.disabled = true;
+      try {
+        const response = await apiRequest(`${RACE_API}/${selectedScheduleRace.id}/schedule`, {
+          method: "PUT",
+          body: JSON.stringify({ version: scheduleData.version || 0, items }),
+        });
+        scheduleData.version = response.data.version;
+        scheduleData.items = response.data.items;
+        renderSchedule();
+        showToast(scheduleToast, response.message || "分站日程保存成功");
+      } catch (err) {
+        if (err.status === 409) {
+          const refreshed = await apiRequest(`${RACE_API}/${selectedScheduleRace.id}/schedule`);
+          scheduleData = refreshed.data;
+          renderSchedule();
+          showToast(scheduleToast, `${err.message}，日程已刷新`, true);
+        } else {
+          showToast(scheduleToast, err.message, true);
+        }
+      } finally {
+        saveButton.disabled = false;
+      }
+    });
+    document.getElementById("results-modal-close").addEventListener("click", () => resultsModal.close());
+    resultsModal.addEventListener("click", (event) => { if (event.target === resultsModal) resultsModal.close(); });
+    document.querySelectorAll("[data-result-tab]").forEach((button) => {
+      button.addEventListener("click", () => setResultTab(button.dataset.resultTab));
+    });
+    document.getElementById("edit-results-btn").addEventListener("click", openResultsEditor);
+    syncResultsButton.addEventListener("click", async () => {
+      if (!isAdmin || !selectedResultRace || !resultData) return;
+      if (!confirm(`确认从 MotoGP 官网更新“${selectedResultRace.country}”分站的冲刺赛和正赛排名吗？`)) return;
+      syncResultsButton.disabled = true;
+      syncResultsButton.textContent = "同步中…";
+      showToast(resultsToast, "正在读取 MotoGP 官方赛果，请稍候…");
+      try {
+        const response = await apiRequest(`${RACE_API}/${selectedResultRace.id}/results/sync`, { method: "POST" });
+        resultData = response.data.results;
+        const sprint = response.data.summary.types.sprint;
+        const race = response.data.summary.types.race;
+        setResultTab(selectedResultType);
+        showToast(
+          resultsToast,
+          `同步成功：冲刺赛匹配 ${sprint.matched}/${sprint.official_total}，正赛匹配 ${race.matched}/${race.official_total}`
+          + (response.data.riders.created ? `，并新增 ${response.data.riders.created} 名官网车手` : "")
+          + (response.data.summary.skipped_total ? `，仍有 ${response.data.summary.skipped_total} 名车手无法匹配` : "")
+        );
+      } catch (err) {
+        const message = err.status === 429 && err.retryAfter
+          ? `同步过于频繁，请在 ${formatCooldown(err.retryAfter)}后重试`
+          : err.message;
+        showToast(resultsToast, message, true);
+      } finally {
+        syncResultsButton.disabled = false;
+        syncResultsButton.textContent = "从官网刷新";
+      }
+    });
+    document.getElementById("add-result-row-btn").addEventListener("click", () => addResultEditorRow());
+    document.getElementById("cancel-results-btn").addEventListener("click", () => setResultTab(selectedResultType));
+    resultEditorList.addEventListener("click", (event) => {
+      const removeButton = event.target.closest(".result-row-remove");
+      if (removeButton) removeButton.closest(".result-editor-row").remove();
+    });
+    resultEditorList.addEventListener("change", (event) => {
+      if (event.target.matches(".result-status-input")) {
+        updateResultEditorRow(event.target.closest(".result-editor-row"));
+      }
+    });
+
+    resultsEditor.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!isAdmin || !selectedResultRace || !resultData) return;
+      const rows = [...resultEditorList.querySelectorAll(".result-editor-row")].map((item) => ({
+        position: Number(item.querySelector(".result-position-input").value),
+        rider_id: Number(item.querySelector(".result-rider-input").value),
+        points: Number(item.querySelector(".result-points-input").value),
+        finish_time: item.querySelector(".result-time-input").value.trim(),
+        result_status: item.querySelector(".result-status-input").value,
+        remaining_laps: item.querySelector(".result-laps-input").value === ""
+          ? null
+          : Number(item.querySelector(".result-laps-input").value),
+      }));
+      const saveButton = document.getElementById("save-results-btn");
+      saveButton.disabled = true;
+      try {
+        const response = await apiRequest(`${RACE_API}/${selectedResultRace.id}/results/${selectedResultType}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            version: resultData.versions[selectedResultType] || 0,
+            results: rows,
+          }),
+        });
+        resultData.versions[selectedResultType] = response.data.version;
+        resultData[selectedResultType] = response.data.results;
+        setResultTab(selectedResultType);
+        showToast(resultsToast, response.message || "排名保存成功");
+      } catch (err) {
+        if (err.status === 409) {
+          const refreshed = await apiRequest(`${RACE_API}/${selectedResultRace.id}/results`);
+          resultData = refreshed.data;
+          setResultTab(selectedResultType);
+          showToast(resultsToast, `${err.message}，排名已刷新`, true);
+        } else {
+          showToast(resultsToast, err.message, true);
+        }
+      } finally {
+        saveButton.disabled = false;
+      }
+    });
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!isAdmin) return;
+      const id = document.getElementById("race-id").value;
+      const payload = getPayload();
+      if (id) payload.version = Number(document.getElementById("race-version").value);
+      submitBtn.disabled = true;
+      try {
+        await apiRequest(id ? `${RACE_API}/${id}` : RACE_API, {
+          method: id ? "PUT" : "POST",
+          body: JSON.stringify(payload),
+        });
+        const season = payload.season;
+        closeModal();
+        await loadEvents(season);
+        showToast(calendarToast, id ? "赛程修改成功" : "赛程添加成功");
+      } catch (err) {
+        if (err.status === 409) {
+          await loadEvents(payload.season);
+          showToast(formToast, `${err.message}，请关闭窗口后重新编辑`, true);
+        } else {
+          showToast(formToast, err.message, true);
+        }
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    grid.addEventListener("click", async (event) => {
+      const resultsBtn = event.target.closest("[data-view-results]");
+      if (resultsBtn) {
+        const race = eventsById.get(resultsBtn.dataset.viewResults);
+        if (race) await openResultsModal(race);
+        return;
+      }
+      const editBtn = event.target.closest("[data-edit-race]");
+      const deleteBtn = event.target.closest("[data-delete-race]");
+      if (editBtn) {
+        if (!isAdmin) return;
+        const race = eventsById.get(editBtn.dataset.editRace);
+        if (race) openEditModal(race);
+        return;
+      }
+      if (deleteBtn) {
+        if (!isAdmin) return;
+        const race = eventsById.get(deleteBtn.dataset.deleteRace);
+        if (!race || !confirm(`确认删除 ${race.season} 赛季第 ${race.round_number} 站“${race.country}”吗？`)) return;
+        try {
+          await apiRequest(`${RACE_API}/${race.id}`, { method: "DELETE" });
+          await loadEvents(race.season);
+          showToast(calendarToast, "赛程已删除");
+        } catch (err) {
+          showToast(calendarToast, err.message, true);
+        }
+        return;
+      }
+      const scheduleCard = event.target.closest("[data-view-schedule]");
+      if (scheduleCard) {
+        const race = eventsById.get(scheduleCard.dataset.viewSchedule);
+        if (race) await openScheduleModal(race);
+      }
+    });
+    grid.addEventListener("keydown", async (event) => {
+      const scheduleCard = event.target.closest("[data-view-schedule]");
+      if (!scheduleCard || event.target !== scheduleCard || !["Enter", " "].includes(event.key)) return;
+      event.preventDefault();
+      const race = eventsById.get(scheduleCard.dataset.viewSchedule);
+      if (race) await openScheduleModal(race);
+    });
+
+    document.getElementById("logout-btn").addEventListener("click", () => logout());
+    init();
+  </script>
+</body>
+</html>
