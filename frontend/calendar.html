@@ -125,7 +125,7 @@
         <button type="button" data-result-tab="race" role="tab" aria-selected="false">正赛</button>
       </div>
       <div class="results-admin-actions" id="results-admin-actions" hidden>
-        <span class="results-sync-hint" id="results-sync-hint">每个分站每 1 小时可同步一次</span>
+        <span class="results-sync-hint" id="results-sync-hint">每场比赛每 1 小时可同步一次</span>
         <button type="button" class="btn-primary" id="edit-results-btn">更新当前排名</button>
         <button type="button" class="btn-ghost" id="sync-results-btn">从官网刷新</button>
       </div>
@@ -207,6 +207,7 @@
     const resultsEditor = document.getElementById("results-editor");
     const resultEditorList = document.getElementById("result-editor-list");
     const resultsToast = document.getElementById("results-toast");
+    const editResultsButton = document.getElementById("edit-results-btn");
     const syncResultsButton = document.getElementById("sync-results-btn");
 
     function showToast(el, message, isError = false) {
@@ -418,7 +419,12 @@
         button.setAttribute("aria-selected", String(active));
       });
       resultsEditor.hidden = true;
-      document.getElementById("results-admin-actions").hidden = !isAdmin || !resultData;
+      const availability = resultData?.availability?.[type];
+      document.getElementById("results-admin-actions").hidden =
+        !isAdmin || !resultData || (!availability?.available && !availability?.started);
+      editResultsButton.hidden = !availability?.available;
+      syncResultsButton.hidden = !availability?.started;
+      syncResultsButton.textContent = `从官网刷新${resultTypeLabel(type)}`;
       renderResults();
     }
 
@@ -426,7 +432,11 @@
       if (!resultData) return;
       const rows = resultData[selectedResultType] || [];
       if (!rows.length) {
-        resultsView.innerHTML = `<div class="results-empty">暂未录入${resultTypeLabel()}排名</div>`;
+        const availability = resultData.availability?.[selectedResultType];
+        const hint = availability && !availability.available
+          ? `<small>${escapeHtml(availability.reason)}</small>`
+          : "";
+        resultsView.innerHTML = `<div class="results-empty">暂未录入${resultTypeLabel()}排名${hint}</div>`;
         return;
       }
       resultsView.innerHTML = `
@@ -463,7 +473,7 @@
         const response = await apiRequest(`${RACE_API}/${race.id}/results`);
         resultData = response.data;
         document.getElementById("results-sync-hint").textContent =
-          `每个分站每 ${formatCooldown(resultData.sync_cooldown_seconds || 3600)}可同步一次`;
+          `每场比赛每 ${formatCooldown(resultData.sync_cooldown_seconds || 3600)}可同步一次`;
         setResultTab("sprint");
       } catch (err) {
         resultsView.innerHTML = `<div class="results-empty">${escapeHtml(err.message)}</div>`;
@@ -516,7 +526,7 @@
     }
 
     async function openResultsEditor() {
-      if (!resultData) return;
+      if (!resultData || !resultData.availability?.[selectedResultType]?.available) return;
       try {
         await ensureRidersLoaded();
         resultEditorList.innerHTML = "";
@@ -655,19 +665,23 @@
     document.getElementById("edit-results-btn").addEventListener("click", openResultsEditor);
     syncResultsButton.addEventListener("click", async () => {
       if (!isAdmin || !selectedResultRace || !resultData) return;
-      if (!confirm(`确认从 MotoGP 官网更新“${selectedResultRace.country}”分站的冲刺赛和正赛排名吗？`)) return;
+      const typeLabel = resultTypeLabel();
+      if (!resultData.availability?.[selectedResultType]?.started) return;
+      if (!confirm(`确认从 MotoGP 官网更新“${selectedResultRace.country}”分站的${typeLabel}排名吗？`)) return;
       syncResultsButton.disabled = true;
       syncResultsButton.textContent = "同步中…";
       showToast(resultsToast, "正在读取 MotoGP 官方赛果，请稍候…");
       try {
-        const response = await apiRequest(`${RACE_API}/${selectedResultRace.id}/results/sync`, { method: "POST" });
+        const response = await apiRequest(
+          `${RACE_API}/${selectedResultRace.id}/results/sync?race_type=${selectedResultType}`,
+          { method: "POST" }
+        );
         resultData = response.data.results;
-        const sprint = response.data.summary.types.sprint;
-        const race = response.data.summary.types.race;
+        const synced = response.data.summary.types[selectedResultType];
         setResultTab(selectedResultType);
         showToast(
           resultsToast,
-          `同步成功：冲刺赛匹配 ${sprint.matched}/${sprint.official_total}，正赛匹配 ${race.matched}/${race.official_total}`
+          `同步成功：${typeLabel}匹配 ${synced.matched}/${synced.official_total}`
           + (response.data.riders.created ? `，并新增 ${response.data.riders.created} 名官网车手` : "")
           + (response.data.summary.skipped_total ? `，仍有 ${response.data.summary.skipped_total} 名车手无法匹配` : "")
         );
@@ -678,7 +692,7 @@
         showToast(resultsToast, message, true);
       } finally {
         syncResultsButton.disabled = false;
-        syncResultsButton.textContent = "从官网刷新";
+        syncResultsButton.textContent = `从官网刷新${resultTypeLabel()}`;
       }
     });
     document.getElementById("add-result-row-btn").addEventListener("click", () => addResultEditorRow());

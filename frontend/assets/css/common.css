@@ -641,6 +641,12 @@ body {
   border-radius: 11px;
 }
 
+.results-empty small {
+  display: block;
+  margin-top: 8px;
+  color: rgba(160, 199, 221, 0.82);
+}
+
 .results-admin-actions {
   display: flex;
   align-items: center;

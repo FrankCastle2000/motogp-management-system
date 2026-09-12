@@ -242,7 +242,13 @@ def _find_season_and_motogp_category(season_year: int, event_uuid: str | None = 
     return season, category
 
 
-def _fetch_event_results(season_year: int, round_number: int, event: dict, category: dict):
+def _fetch_event_results(
+    season_year: int,
+    round_number: int,
+    event: dict,
+    category: dict,
+    race_types=("sprint", "race"),
+):
     sessions = _get_json(
         "/v1/results/sessions",
         {"eventUuid": event["id"], "categoryUuid": category["id"]},
@@ -260,7 +266,9 @@ def _fetch_event_results(season_year: int, round_number: int, event: dict, categ
         "official": {},
         "source_files": {},
     }
-    for local_type, official_type in (("sprint", "SPR"), ("race", "RAC")):
+    official_types = {"sprint": "SPR", "race": "RAC"}
+    for local_type in race_types:
+        official_type = official_types[local_type]
         session = next(
             (
                 item for item in sessions
@@ -343,12 +351,13 @@ def fetch_race_results(
     round_number: int,
     start_date: str,
     end_date: str,
+    race_types=("sprint", "race"),
 ):
-    """读取指定分站的 MotoGP 冲刺赛和正赛分类结果。"""
+    """读取指定分站中已结束的指定场次分类结果。"""
     season, category = _find_season_and_motogp_category(season_year)
     events = _get_json(
         "/v1/results/events",
-        {"seasonUuid": season["id"], "isFinished": "true"},
+        {"seasonUuid": season["id"]},
     )
     if isinstance(events, dict) and "value" in events:
         events = events["value"]
@@ -368,9 +377,9 @@ def fetch_race_results(
         event = grand_prix_events[round_number - 1]
     if not event or not event.get("id"):
         raise OfficialApiError(f"官方接口中没有 {season_year} 赛季第 {round_number} 站")
-    if str(event.get("status") or "").upper() != "FINISHED":
-        raise OfficialApiError("该分站在官方接口中尚未完赛")
-    return _fetch_event_results(season_year, round_number, event, category)
+    return _fetch_event_results(
+        season_year, round_number, event, category, tuple(race_types)
+    )
 
 
 def fetch_finished_season_results(season_year: int):

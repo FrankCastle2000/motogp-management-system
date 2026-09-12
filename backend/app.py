@@ -744,6 +744,9 @@ def api_replace_race_results(event_id: int, race_type: str):
     """
     if race_type not in ("sprint", "race"):
         return jsonify({"ok": False, "message": "比赛类型无效"}), 400
+    availability = db.list_race_results(event_id)["availability"][race_type]
+    if not availability["available"]:
+        return jsonify({"ok": False, "message": availability["reason"]}), 400
     body = request.get_json(silent=True) or {}
     raw_results = body.get("results")
     if not isinstance(raw_results, list):
@@ -817,29 +820,38 @@ def api_replace_race_results(event_id: int, race_type: str):
 @app.post("/api/races/<int:event_id>/results/sync")
 @admin_required
 def api_sync_race_results(event_id: int):
-    """从 MotoGP 官方接口同步指定完赛分站的冲刺赛和正赛排名。
+    """从 MotoGP 官方接口同步指定分站中已经结束的一场比赛排名。
 
-    输入：路径参数 event_id 和管理员 Session Cookie，无 JSON 参数。
-    输出：两类赛果的匹配、跳过统计及最新本地排名；冷却期内返回 429。
+    输入：路径参数 event_id、查询参数 race_type（sprint 或 race）和管理员 Session Cookie。
+    输出：所选场次赛果的匹配、跳过统计及最新本地排名；冷却期内返回 429。
     """
+    race_type = str(request.args.get("race_type") or "").strip().lower()
+    if race_type not in ("sprint", "race"):
+        return jsonify({"ok": False, "message": "请选择要同步的冲刺赛或正赛"}), 400
     local_data = db.list_race_results(event_id)
     event = local_data["event"]
-    if date.fromisoformat(event["end_date"]) >= date.today():
-        return jsonify({"ok": False, "message": "仅已结束的分站可以同步官方排名"}), 400
+    availability = local_data["availability"][race_type]
+    if not availability["started"]:
+        return jsonify({"ok": False, "message": "该场次尚未开始，暂不能检查官方排名"}), 400
 
-    sync_key = f"motogp-race-results:{event_id}"
-    db.reserve_external_sync(sync_key, MOTOGP_RACE_RESULTS_SYNC_COOLDOWN_SECONDS)
+    sync_key = f"motogp-race-results:{event_id}:{race_type}"
+    db.reserve_external_sync(
+        sync_key,
+        MOTOGP_RACE_RESULTS_SYNC_COOLDOWN_SECONDS,
+        failure_cooldown_seconds=min(300, MOTOGP_RACE_RESULTS_SYNC_COOLDOWN_SECONDS),
+    )
     try:
         official = motogp_sync.fetch_race_results(
             event["season"],
             event["round_number"],
             event["start_date"],
             event["end_date"],
+            race_types=(race_type,),
         )
         local_numbers = {rider["rider_number"] for rider in db.list_riders()}
         appearances = {}
-        for race_type in ("sprint", "race"):
-            for row in official[race_type]:
+        for selected_type in (race_type,):
+            for row in official[selected_type]:
                 appearances.setdefault(row["rider_number"], row)
         profiles = [
             motogp_sync.fetch_rider_profile(row["rider_api_id"], event["season"], row)
@@ -855,6 +867,7 @@ def api_sync_race_results(event_id: int):
             event_id,
             official,
             local_data["versions"],
+            race_types=(race_type,),
             operator_id=session.get("user_id"),
             operator_username=session.get("username", ""),
         )
@@ -880,7 +893,7 @@ def api_sync_race_results(event_id: int):
             },
             "cooldown_seconds": MOTOGP_RACE_RESULTS_SYNC_COOLDOWN_SECONDS,
         },
-        "message": "已从 MotoGP 官网更新分站排名",
+        "message": f"已从 MotoGP 官网更新{'冲刺赛' if race_type == 'sprint' else '正赛'}排名",
     })
 
 

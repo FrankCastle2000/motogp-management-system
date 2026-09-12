@@ -1,7 +1,8 @@
 import json
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from difflib import SequenceMatcher
+from zoneinfo import ZoneInfo
 
 import pymysql
 from pymysql.cursors import DictCursor
@@ -26,6 +27,9 @@ class SyncCooldownError(ValueError):
     def __init__(self, retry_after: int):
         self.retry_after = max(1, int(retry_after))
         super().__init__(f"请在 {self.retry_after} 秒后再同步")
+
+
+BEIJING_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
 RACE_EVENT_SEED = [
@@ -1777,9 +1781,88 @@ def list_race_results(event_id: int):
                 race_type = result_set["race_type"]
                 data["versions"][race_type] = result_set["version"]
                 data[race_type] = _fetch_race_result_entries(cur, result_set["id"])
+            data["availability"] = _race_result_availability(cur, event, data)
             return data
     finally:
         conn.close()
+
+
+def _race_result_availability(cur, event: dict, result_data: dict | None = None):
+    """按北京时间判断冲刺赛和正赛是否已结束，可否录入或同步排名。"""
+    now = datetime.now(BEIJING_TIMEZONE)
+    event_finished = date.fromisoformat(event["end_date"]) < now.date()
+    states = {
+        "sprint": {
+            "available": event_finished,
+            "started": event_finished,
+            "scheduled_start_at": None,
+            "completed_at": None,
+        },
+        "race": {
+            "available": event_finished,
+            "started": event_finished,
+            "scheduled_start_at": None,
+            "completed_at": None,
+        },
+    }
+    cur.execute(
+        """
+        SELECT rsi.schedule_date, rsi.start_time, rsi.end_time,
+               rsi.category, rsi.session_name
+        FROM race_schedule_items rsi
+        JOIN race_schedule_sets rss ON rss.id = rsi.schedule_set_id
+        WHERE rss.race_event_id = %s
+        ORDER BY rsi.schedule_date, rsi.start_time
+        """,
+        (event["id"],),
+    )
+    for item in cur.fetchall():
+        category = str(item.get("category") or "").casefold()
+        name = str(item.get("session_name") or "").casefold()
+        if "motogp" not in category.replace(" ", ""):
+            continue
+        if "sprint" in name or "冲刺" in name:
+            race_type = "sprint"
+        elif (
+            re.search(r"(^|\W)race(\W|$)", name)
+            or "grand prix" in name
+            or "正赛" in name
+        ):
+            race_type = "race"
+        else:
+            continue
+        start_at = datetime.fromisoformat(
+            f"{_format_date(item['schedule_date'])}T{item['start_time']}"
+        ).replace(tzinfo=BEIJING_TIMEZONE)
+        has_end_time = bool(item.get("end_time"))
+        end_time = str(item.get("end_time") or item.get("start_time") or "")
+        completed_at = datetime.fromisoformat(
+            f"{_format_date(item['schedule_date'])}T{end_time}"
+        ).replace(tzinfo=BEIJING_TIMEZONE)
+        if not has_end_time:
+            # 官网部分正赛类日程只提供发车时间，保留合理缓冲，避免比赛刚开始就开放排名。
+            completed_at += timedelta(minutes=30 if race_type == "sprint" else 60)
+        states[race_type] = {
+            "available": now >= completed_at,
+            "started": now >= start_at,
+            "scheduled_start_at": start_at.isoformat(timespec="minutes"),
+            "completed_at": completed_at.isoformat(timespec="minutes"),
+        }
+
+    # 已有排名始终允许管理员继续维护，避免后来修改日程导致历史数据被锁住。
+    for race_type in ("sprint", "race"):
+        if result_data and result_data.get(race_type):
+            states[race_type]["available"] = True
+            states[race_type]["started"] = True
+        if states[race_type]["available"]:
+            states[race_type]["reason"] = "该场次已结束，可以录入或同步排名"
+        elif states[race_type]["started"]:
+            states[race_type]["reason"] = (
+                "比赛已经发车，可从官网检查正式赛果；手动录入将在兜底时间后开放"
+            )
+        else:
+            states[race_type]["reason"] = "该场次尚未开始"
+    return states
 
 
 def replace_race_results(
@@ -1882,6 +1965,7 @@ def sync_race_results(
     event_id: int,
     official_results: dict,
     expected_versions: dict,
+    race_types=("sprint", "race"),
     operator_id=None,
     operator_username="",
 ):
@@ -1894,7 +1978,7 @@ def sync_race_results(
             if not event:
                 raise ValueError("赛程不存在")
 
-            for race_type in ("sprint", "race"):
+            for race_type in race_types:
                 official_rows = official_results.get(race_type) or []
                 if not official_rows:
                     raise ValueError("官方赛果不完整，已取消本次同步")
@@ -2177,9 +2261,18 @@ def delete_rider_standing(standing_id: int, operator_id=None, operator_username=
         conn.close()
 
 
-def reserve_external_sync(sync_key: str, cooldown_seconds: int):
+def reserve_external_sync(
+    sync_key: str,
+    cooldown_seconds: int,
+    failure_cooldown_seconds: int | None = None,
+):
     """以数据库锁预留一次同步，避免多进程或多管理员重复请求官方接口。"""
     cooldown_seconds = max(0, int(cooldown_seconds))
+    failure_cooldown_seconds = (
+        cooldown_seconds
+        if failure_cooldown_seconds is None
+        else max(0, int(failure_cooldown_seconds))
+    )
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -2192,8 +2285,9 @@ def reserve_external_sync(sync_key: str, cooldown_seconds: int):
             )
             cur.execute(
                 """
-                SELECT last_attempt_at,
-                       TIMESTAMPDIFF(SECOND, last_attempt_at, NOW()) AS elapsed
+                SELECT last_attempt_at, last_success_at, last_status,
+                       TIMESTAMPDIFF(SECOND, last_attempt_at, NOW()) AS attempt_elapsed,
+                       TIMESTAMPDIFF(SECOND, last_success_at, NOW()) AS success_elapsed
                 FROM external_sync_state
                 WHERE sync_key = %s
                 FOR UPDATE
@@ -2201,13 +2295,11 @@ def reserve_external_sync(sync_key: str, cooldown_seconds: int):
                 (sync_key,),
             )
             state = cur.fetchone()
-            if (
-                cooldown_seconds
-                and state["last_attempt_at"] is not None
-                and state["elapsed"] is not None
-                and state["elapsed"] < cooldown_seconds
-            ):
-                raise SyncCooldownError(cooldown_seconds - state["elapsed"])
+            last_succeeded = state["last_status"] == "success"
+            active_cooldown = cooldown_seconds if last_succeeded else failure_cooldown_seconds
+            elapsed = state["success_elapsed"] if last_succeeded else state["attempt_elapsed"]
+            if active_cooldown and elapsed is not None and elapsed < active_cooldown:
+                raise SyncCooldownError(active_cooldown - elapsed)
             cur.execute(
                 """
                 UPDATE external_sync_state
