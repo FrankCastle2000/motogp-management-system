@@ -620,8 +620,12 @@ body {
   align-items: center;
   justify-content: flex-end;
   gap: 9px;
-  margin-top: 14px;
+  margin: -4px 0 14px;
+  padding: 9px 11px;
   flex-wrap: wrap;
+  background: rgba(79, 163, 209, 0.07);
+  border: 1px solid rgba(126, 184, 218, 0.16);
+  border-radius: 10px;
 }
 
 .results-admin-actions button {

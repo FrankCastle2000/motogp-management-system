@@ -124,13 +124,13 @@
         <button type="button" class="active" data-result-tab="sprint" role="tab" aria-selected="true">冲刺赛</button>
         <button type="button" data-result-tab="race" role="tab" aria-selected="false">正赛</button>
       </div>
-      <div id="results-view">
-        <div class="calendar-empty">正在加载排名…</div>
-      </div>
       <div class="results-admin-actions" id="results-admin-actions" hidden>
         <span class="results-sync-hint" id="results-sync-hint">每个分站每 1 小时可同步一次</span>
-        <button type="button" class="btn-primary" id="sync-results-btn">从官网刷新</button>
-        <button type="button" class="btn-edit" id="edit-results-btn">编辑当前排名</button>
+        <button type="button" class="btn-primary" id="edit-results-btn">更新当前排名</button>
+        <button type="button" class="btn-ghost" id="sync-results-btn">从官网刷新</button>
+      </div>
+      <div id="results-view">
+        <div class="calendar-empty">正在加载排名…</div>
       </div>
       <form id="results-editor" hidden>
         <div class="result-editor-heading">
