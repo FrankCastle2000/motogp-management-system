@@ -256,6 +256,7 @@
       const statuses = getStatuses(events);
       grid.innerHTML = events.map((event, index) => {
         const status = statuses[index];
+        const scheduleAction = `<button type="button" class="btn-result" data-view-schedule="${event.id}">查看比赛日程</button>`;
         const resultAction = status.key === "finished"
           ? `<button type="button" class="btn-result" data-view-results="${event.id}">查看排名</button>`
           : "";
@@ -264,7 +265,7 @@
             <button type="button" class="btn-danger" data-delete-race="${event.id}">删除</button>` : "";
         const actions = `
           <div class="race-card-actions">
-            ${resultAction}${adminActions}
+            ${scheduleAction}${resultAction}${adminActions}
           </div>`;
         return `
           <article class="race-card ${status.key}" data-view-schedule="${event.id}" tabindex="0"
@@ -278,7 +279,6 @@
             <h2><span>${event.round_number}</span> ${escapeHtml(event.country)}</h2>
             <div class="race-country-en">${escapeHtml(event.country_en)}</div>
             <p class="race-circuit">${escapeHtml(event.circuit)}</p>
-            <span class="race-card-schedule-hint">查看比赛日程 <b>→</b></span>
             ${actions}
           </article>`;
       }).join("");

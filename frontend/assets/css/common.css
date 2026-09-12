@@ -351,25 +351,6 @@ body {
   font-size: 0.76rem;
 }
 
-.race-card-schedule-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  width: max-content;
-  margin-top: 10px;
-  color: #75bce2;
-  font-size: 0.73rem;
-  font-weight: 600;
-}
-
-.race-card-schedule-hint b {
-  transition: transform 0.16s ease;
-}
-
-.race-card:hover .race-card-schedule-hint b {
-  transform: translateX(3px);
-}
-
 .btn-result {
   color: #dff4ff;
   background: rgba(79, 163, 209, 0.18);
