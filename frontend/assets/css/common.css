@@ -234,11 +234,25 @@ body {
   outline: 2px solid #f13a43;
   outline-offset: -2px;
   background: linear-gradient(145deg, rgba(56, 31, 38, 0.98), rgba(17, 29, 36, 0.97));
+  box-shadow: 0 5px 18px rgba(226, 31, 43, 0.2);
+}
+
+.race-card.next {
+  border-color: rgba(243, 189, 78, 0.68);
+  background: linear-gradient(145deg, rgba(55, 48, 29, 0.97), rgba(15, 31, 38, 0.97));
+  box-shadow: inset 0 3px 0 rgba(243, 189, 78, 0.9), 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+.race-card.upcoming {
+  border-color: rgba(102, 179, 219, 0.38);
+  background: linear-gradient(145deg, rgba(18, 46, 59, 0.97), rgba(10, 29, 38, 0.97));
+  box-shadow: inset 0 3px 0 rgba(102, 179, 219, 0.42), 0 3px 12px rgba(0, 0, 0, 0.15);
 }
 
 .race-card.finished {
-  background: linear-gradient(145deg, rgba(17, 37, 46, 0.98), rgba(10, 25, 32, 0.97));
-  border-color: rgba(126, 184, 218, 0.14);
+  background: linear-gradient(145deg, rgba(22, 34, 39, 0.98), rgba(11, 23, 28, 0.98));
+  border-color: rgba(132, 153, 163, 0.2);
+  box-shadow: inset 0 3px 0 rgba(111, 135, 148, 0.28), 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 
 .race-card.finished .race-country-en,
@@ -261,14 +275,26 @@ body {
   letter-spacing: 0.04em;
 }
 
-.race-card.next .race-status,
 .race-card.live .race-status {
   background: #e21f2b;
 }
 
+.race-card.next .race-status {
+  color: #17232a;
+  background: #f3bd4e;
+}
+
 .race-card.upcoming .race-status {
   color: #dcebf2;
-  background: #385666;
+  background: #3f7088;
+}
+
+.race-card.next .race-country-en {
+  color: #f3bd4e;
+}
+
+.race-card.upcoming .race-country-en {
+  color: #8fc5df;
 }
 
 .race-card-top {
