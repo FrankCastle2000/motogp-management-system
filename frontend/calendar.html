@@ -159,6 +159,7 @@
         <div class="calendar-toolbar-side">
           <div class="calendar-legend">
             <span><i class="legend-dot finished"></i>已结束</span>
+            <span><i class="legend-dot live"></i>进行中</span>
             <span><i class="legend-dot next"></i>下一站</span>
             <span><i class="legend-dot upcoming"></i>待开始</span>
           </div>
@@ -261,10 +262,10 @@
         const adminActions = isAdmin ? `
             <button type="button" class="btn-edit" data-edit-race="${event.id}">编辑</button>
             <button type="button" class="btn-danger" data-delete-race="${event.id}">删除</button>` : "";
-        const actions = resultAction || adminActions ? `
+        const actions = `
           <div class="race-card-actions">
             ${resultAction}${adminActions}
-          </div>` : "";
+          </div>`;
         return `
           <article class="race-card ${status.key}" data-view-schedule="${event.id}" tabindex="0"
                    aria-label="查看${escapeHtml(event.country)}大奖赛比赛日程">

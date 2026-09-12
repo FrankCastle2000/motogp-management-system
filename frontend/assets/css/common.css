@@ -184,12 +184,14 @@ body {
 }
 
 .legend-dot.finished { background: #6f8794; }
-.legend-dot.next { background: #f13a43; box-shadow: 0 0 0 4px rgba(241, 58, 67, 0.14); }
+.legend-dot.live { background: #f13a43; box-shadow: 0 0 0 4px rgba(241, 58, 67, 0.14); }
+.legend-dot.next { background: #f3bd4e; }
 .legend-dot.upcoming { background: var(--accent); }
 
 .race-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-auto-rows: 1fr;
   gap: 12px;
 }
 
@@ -228,7 +230,7 @@ body {
   content: none;
 }
 
-.race-card.next {
+.race-card.live {
   outline: 2px solid #f13a43;
   outline-offset: -2px;
   background: linear-gradient(145deg, rgba(56, 31, 38, 0.98), rgba(17, 29, 36, 0.97));
@@ -336,7 +338,10 @@ body {
   position: relative;
   z-index: 2;
   display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
   gap: 8px;
+  min-height: 31px;
   margin-top: auto;
   padding-top: 14px;
 }
