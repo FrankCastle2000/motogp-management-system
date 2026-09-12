@@ -108,6 +108,17 @@ body {
   margin-left: auto;
 }
 
+.calendar-admin-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.calendar-admin-actions button {
+  width: auto;
+  white-space: nowrap;
+}
+
 .season-picker {
   display: inline-flex;
   align-items: center;
@@ -906,6 +917,7 @@ body {
   .calendar-toolbar-main,
   .calendar-toolbar-side { width: 100%; flex-wrap: wrap; }
   .calendar-toolbar-side { justify-content: space-between; margin-left: 0; }
+  .calendar-admin-actions { flex-wrap: wrap; }
   .calendar-legend { flex-wrap: wrap; gap: 10px 16px; }
   .race-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .result-editor-row { grid-template-columns: 72px minmax(0, 1fr) 72px; }

@@ -272,6 +272,7 @@ def _fetch_event_results(
     event: dict,
     category: dict,
     race_types=("sprint", "race"),
+    allow_missing: bool = False,
 ):
     sessions = _get_json(
         "/v1/results/sessions",
@@ -289,6 +290,9 @@ def _fetch_event_results(
         "race": [],
         "official": {},
         "source_files": {},
+        "errors": {},
+        "start_date": str(event.get("date_start") or "")[:10],
+        "end_date": str(event.get("date_end") or "")[:10],
     }
     official_types = {"sprint": "SPR", "race": "RAC"}
     for local_type in race_types:
@@ -302,18 +306,22 @@ def _fetch_event_results(
             None,
         )
         if not session or not session.get("id"):
-            raise OfficialApiError(
-                f"官方接口没有返回{'冲刺赛' if local_type == 'sprint' else '正赛'}场次"
-            )
+            message = f"官方接口没有返回{'冲刺赛' if local_type == 'sprint' else '正赛'}场次"
+            if allow_missing:
+                result["errors"][local_type] = message
+                continue
+            raise OfficialApiError(message)
         classification_result = _get_json(
             "/v2/results/classifications",
             {"session": session["id"], "seasonYear": season_year},
         )
         classification = classification_result.get("classification") or []
         if not classification:
-            raise OfficialApiError(
-                f"官方接口没有返回{'冲刺赛' if local_type == 'sprint' else '正赛'}排名"
-            )
+            message = f"官方接口没有返回{'冲刺赛' if local_type == 'sprint' else '正赛'}排名"
+            if allow_missing:
+                result["errors"][local_type] = message
+                continue
+            raise OfficialApiError(message)
         winner_laps = max(
             (int(item.get("total_laps") or 0) for item in classification),
             default=0,
@@ -360,7 +368,11 @@ def _fetch_event_results(
                 continue
             rows.append(row)
         if not rows:
-            raise OfficialApiError("官方分站排名中没有有效名次")
+            message = "官方分站排名中没有有效名次"
+            if allow_missing:
+                result["errors"][local_type] = message
+                continue
+            raise OfficialApiError(message)
         result[local_type] = rows
         result["official"][local_type] = bool(classification_result.get("official"))
         result["source_files"][local_type] = (
@@ -411,22 +423,42 @@ def fetch_finished_season_results(season_year: int):
     season, category = _find_season_and_motogp_category(season_year)
     events = _get_json(
         "/v1/results/events",
-        {"seasonUuid": season["id"], "isFinished": "true"},
+        {"seasonUuid": season["id"]},
     )
     if isinstance(events, dict) and "value" in events:
         events = events["value"]
     grand_prix_events = sorted(
-        (
-            item for item in events
-            if not item.get("test")
-            and str(item.get("status") or "").upper() == "FINISHED"
-        ),
+        (item for item in events if not item.get("test")),
         key=lambda item: str(item.get("date_start") or ""),
     )
-    return [
-        _fetch_event_results(season_year, index, event, category)
-        for index, event in enumerate(grand_prix_events, start=1)
-    ]
+    results = []
+    failures = []
+    for round_number, event in enumerate(grand_prix_events, start=1):
+        if str(event.get("status") or "").upper() != "FINISHED":
+            continue
+        try:
+            result = _fetch_event_results(
+                season_year,
+                round_number,
+                event,
+                category,
+                allow_missing=True,
+            )
+            if result["sprint"] or result["race"]:
+                results.append(result)
+            else:
+                failures.append({
+                    "round_number": round_number,
+                    "event_name": result["official_event_name"],
+                    "message": "官网尚未发布冲刺赛或正赛排名",
+                })
+        except OfficialApiError as exc:
+            failures.append({
+                "round_number": round_number,
+                "event_name": str(event.get("sponsored_name") or event.get("name") or ""),
+                "message": str(exc),
+            })
+    return {"season": season_year, "events": results, "failed_events": failures}
 
 
 def fetch_rider_profile(rider_api_id: str, season_year: int, appearance: dict):

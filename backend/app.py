@@ -743,7 +743,7 @@ def api_list_race_schedule(event_id: int):
     """查询指定分站的比赛周末日程。
 
     输入：路径参数 event_id 和已登录用户 Session Cookie。
-    输出：分站信息、日程版本号及按日期和当地时间排序的日程数组。
+    输出：分站信息、日程版本号及按北京时间排序的日程数组。
     """
     return jsonify({"ok": True, "data": db.list_race_schedule(event_id)})
 
@@ -766,6 +766,44 @@ def api_replace_race_schedule(event_id: int):
         operator_username=session.get("username", ""),
     )
     return jsonify({"ok": True, "data": result, "message": "分站日程保存成功"})
+
+
+@app.post("/api/races/schedules/sync")
+@admin_required
+def api_sync_race_schedules():
+    """从 MotoGP 官方接口同步指定赛季全部分站日程并转换为北京时间。"""
+    body = request.get_json(silent=True) or {}
+    try:
+        season = int(body.get("season", date.today().year))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "message": "赛季年份无效"}), 400
+    if not 1949 <= season <= 2100:
+        return jsonify({"ok": False, "message": "赛季年份无效"}), 400
+
+    sync_key = f"motogp-race-schedules:{season}"
+    db.reserve_external_sync(
+        sync_key,
+        MOTOGP_SYNC_COOLDOWN_SECONDS,
+        failure_cooldown_seconds=min(300, MOTOGP_SYNC_COOLDOWN_SECONDS),
+    )
+    try:
+        official = motogp_sync.fetch_season_schedules(season)
+        summary = db.sync_season_race_schedules(
+            season,
+            official["events"],
+            operator_id=session.get("user_id"),
+            operator_username=session.get("username", ""),
+        )
+        summary["cooldown_seconds"] = MOTOGP_SYNC_COOLDOWN_SECONDS
+        db.finish_external_sync(
+            sync_key,
+            True,
+            f"同步 {summary['events']} 个分站、{summary['items']} 个日程环节",
+        )
+        return jsonify({"ok": True, "data": summary, "message": "官方赛程同步完成"})
+    except Exception as exc:
+        db.finish_external_sync(sync_key, False, str(exc))
+        raise
 
 
 @app.get("/api/races/<int:event_id>/results")
@@ -942,6 +980,160 @@ def api_sync_race_results(event_id: int):
         },
         "message": f"已从 MotoGP 官网更新{'冲刺赛' if race_type == 'sprint' else '正赛'}排名",
     })
+
+
+@app.post("/api/races/results/sync-finished")
+@admin_required
+def api_sync_finished_race_results():
+    """批量同步指定赛季中所有已完赛分站的冲刺赛和正赛排名。"""
+    body = request.get_json(silent=True) or {}
+    try:
+        season = int(body.get("season", date.today().year))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "message": "赛季年份无效"}), 400
+    if not 1949 <= season <= 2100:
+        return jsonify({"ok": False, "message": "赛季年份无效"}), 400
+    if not db.list_riders():
+        return jsonify({
+            "ok": False,
+            "message": "尚未导入车手资料，请先同步官网车队与车手",
+            "code": "ROSTER_REQUIRED",
+        }), 400
+
+    sync_key = f"motogp-finished-results:{season}"
+    db.reserve_external_sync(
+        sync_key,
+        MOTOGP_RACE_RESULTS_SYNC_COOLDOWN_SECONDS,
+        failure_cooldown_seconds=min(300, MOTOGP_RACE_RESULTS_SYNC_COOLDOWN_SECONDS),
+    )
+    try:
+        official = motogp_sync.fetch_finished_season_results(season)
+        if not official["events"] and not official["failed_events"]:
+            raise ValueError(f"{season} 赛季暂时没有已完赛分站")
+
+        local_events = db.list_race_events(season)
+        local_by_round = {event["round_number"]: event for event in local_events}
+        local_by_dates = {
+            (event["start_date"], event["end_date"]): event
+            for event in local_events
+        }
+
+        local_numbers = {rider["rider_number"] for rider in db.list_riders()}
+        appearances = {}
+        for official_event in official["events"]:
+            for race_type in ("sprint", "race"):
+                for row in official_event.get(race_type) or []:
+                    if row["rider_number"] not in local_numbers:
+                        appearances.setdefault(row["rider_number"], row)
+        profiles = []
+        profile_failures = []
+        for row in appearances.values():
+            try:
+                profiles.append(
+                    motogp_sync.fetch_rider_profile(row["rider_api_id"], season, row)
+                )
+            except motogp_sync.OfficialApiError as exc:
+                profile_failures.append({
+                    "rider_number": row["rider_number"],
+                    "rider_name": row.get("official_name", ""),
+                    "message": str(exc),
+                })
+        rider_summary = db.create_official_riders(
+            profiles,
+            operator_id=session.get("user_id"),
+            operator_username=session.get("username", ""),
+        )
+
+        summary = {
+            "season": season,
+            "official_events": len(official["events"]),
+            "synced_events": 0,
+            "synced_types": 0,
+            "matched": 0,
+            "skipped": 0,
+            "events": [],
+            "failures": list(official["failed_events"]),
+            "rider_failures": profile_failures,
+            "riders_created": len(rider_summary["created"]),
+            "cooldown_seconds": MOTOGP_RACE_RESULTS_SYNC_COOLDOWN_SECONDS,
+        }
+        for official_event in official["events"]:
+            for race_type, message in official_event.get("errors", {}).items():
+                summary["failures"].append({
+                    "round_number": official_event["round_number"],
+                    "event_name": official_event["official_event_name"],
+                    "race_type": race_type,
+                    "message": message,
+                })
+            local_event = local_by_dates.get(
+                (official_event["start_date"], official_event["end_date"])
+            ) or local_by_round.get(official_event["round_number"])
+            if not local_event:
+                summary["failures"].append({
+                    "round_number": official_event["round_number"],
+                    "event_name": official_event["official_event_name"],
+                    "message": "本地数据库中没有对应分站",
+                })
+                continue
+            race_types = tuple(
+                race_type for race_type in ("sprint", "race")
+                if official_event.get(race_type)
+            )
+            try:
+                local_data = db.list_race_results(local_event["id"])
+                event_summary = db.sync_race_results(
+                    local_event["id"],
+                    official_event,
+                    local_data["versions"],
+                    race_types=race_types,
+                    operator_id=session.get("user_id"),
+                    operator_username=session.get("username", ""),
+                )
+                matched = sum(
+                    item["matched"] for item in event_summary["types"].values()
+                )
+                summary["synced_events"] += 1
+                summary["synced_types"] += len(event_summary["types"])
+                summary["matched"] += matched
+                summary["skipped"] += event_summary["skipped_total"]
+                summary["events"].append({
+                    "event_id": local_event["id"],
+                    "round_number": local_event["round_number"],
+                    "country": local_event["country"],
+                    "types": list(event_summary["types"]),
+                    "matched": matched,
+                    "skipped": event_summary["skipped_total"],
+                })
+            except Exception as exc:
+                summary["failures"].append({
+                    "round_number": local_event["round_number"],
+                    "event_name": official_event["official_event_name"],
+                    "message": str(exc),
+                })
+
+        succeeded = summary["synced_events"] > 0
+        db.finish_external_sync(
+            sync_key,
+            succeeded,
+            (
+                f"同步 {summary['synced_events']} 站、{summary['synced_types']} 场；"
+                f"失败 {len(summary['failures'])} 站"
+            ),
+        )
+        if not succeeded:
+            return jsonify({
+                "ok": False,
+                "data": summary,
+                "message": "没有任何已完赛分站同步成功，请查看失败详情后重试",
+            }), 502
+        return jsonify({
+            "ok": True,
+            "data": summary,
+            "message": "已完赛分站成绩批量同步完成",
+        })
+    except Exception as exc:
+        db.finish_external_sync(sync_key, False, str(exc))
+        raise
 
 
 def _parse_rider_standing_body(body):

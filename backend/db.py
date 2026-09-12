@@ -1,6 +1,6 @@
 import json
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from difflib import SequenceMatcher
 from zoneinfo import ZoneInfo
 
@@ -194,8 +194,8 @@ def init_database():
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     schedule_set_id INT NOT NULL COMMENT '日程批次ID',
                     schedule_date DATE NOT NULL COMMENT '比赛周末日期',
-                    start_time CHAR(5) NOT NULL COMMENT '赛道当地开始时间',
-                    end_time CHAR(5) DEFAULT NULL COMMENT '赛道当地结束时间',
+                    start_time CHAR(5) NOT NULL COMMENT '北京时间开始时间',
+                    end_time CHAR(5) DEFAULT NULL COMMENT '北京时间结束时间',
                     category VARCHAR(32) NOT NULL DEFAULT 'MotoGP' COMMENT '比赛组别',
                     session_name VARCHAR(128) NOT NULL COMMENT '环节名称',
                     sort_order SMALLINT NOT NULL DEFAULT 0 COMMENT '同日展示顺序',
@@ -2013,9 +2013,18 @@ def list_race_results(event_id: int):
         conn.close()
 
 
-def _race_result_availability(cur, event: dict, result_data: dict | None = None):
+def _race_result_availability(
+    cur,
+    event: dict,
+    result_data: dict | None = None,
+    current_time: datetime | None = None,
+):
     """按北京时间判断冲刺赛和正赛是否已结束，可否录入或同步排名。"""
-    now = datetime.now(BEIJING_TIMEZONE)
+    now = (
+        current_time.astimezone(BEIJING_TIMEZONE)
+        if current_time is not None
+        else datetime.now(BEIJING_TIMEZONE)
+    )
     event_finished = date.fromisoformat(event["end_date"]) < now.date()
     states = {
         "sprint": {
@@ -2023,12 +2032,14 @@ def _race_result_availability(cur, event: dict, result_data: dict | None = None)
             "started": event_finished,
             "scheduled_start_at": None,
             "completed_at": None,
+            "schedule_found": False,
         },
         "race": {
             "available": event_finished,
             "started": event_finished,
             "scheduled_start_at": None,
             "completed_at": None,
+            "schedule_found": False,
         },
     }
     cur.execute(
@@ -2057,14 +2068,18 @@ def _race_result_availability(cur, event: dict, result_data: dict | None = None)
             race_type = "race"
         else:
             continue
-        start_at = datetime.fromisoformat(
-            f"{_format_date(item['schedule_date'])}T{item['start_time']}"
-        ).replace(tzinfo=BEIJING_TIMEZONE)
+        start_at = datetime.combine(
+            date.fromisoformat(_format_date(item["schedule_date"])),
+            time.fromisoformat(str(item["start_time"])),
+            tzinfo=BEIJING_TIMEZONE,
+        )
         has_end_time = bool(item.get("end_time"))
         end_time = str(item.get("end_time") or item.get("start_time") or "")
-        completed_at = datetime.fromisoformat(
-            f"{_format_date(item['schedule_date'])}T{end_time}"
-        ).replace(tzinfo=BEIJING_TIMEZONE)
+        completed_at = datetime.combine(
+            date.fromisoformat(_format_date(item["schedule_date"])),
+            time.fromisoformat(end_time),
+            tzinfo=BEIJING_TIMEZONE,
+        )
         if not has_end_time:
             # 官网部分正赛类日程只提供发车时间，保留合理缓冲，避免比赛刚开始就开放排名。
             completed_at += timedelta(minutes=30 if race_type == "sprint" else 60)
@@ -2073,6 +2088,7 @@ def _race_result_availability(cur, event: dict, result_data: dict | None = None)
             "started": now >= start_at,
             "scheduled_start_at": start_at.isoformat(timespec="minutes"),
             "completed_at": completed_at.isoformat(timespec="minutes"),
+            "schedule_found": True,
         }
 
     # 已有排名始终允许管理员继续维护，避免后来修改日程导致历史数据被锁住。
@@ -2085,6 +2101,10 @@ def _race_result_availability(cur, event: dict, result_data: dict | None = None)
         elif states[race_type]["started"]:
             states[race_type]["reason"] = (
                 "比赛已经发车，可从官网检查正式赛果；手动录入将在兜底时间后开放"
+            )
+        elif not states[race_type]["schedule_found"]:
+            states[race_type]["reason"] = (
+                "尚未同步该场次的北京时间日程，请先点击“同步官网日程”"
             )
         else:
             states[race_type]["reason"] = "该场次尚未开始"

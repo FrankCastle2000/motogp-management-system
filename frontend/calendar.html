@@ -163,14 +163,18 @@
             <span><i class="legend-dot next"></i>下一站</span>
             <span><i class="legend-dot upcoming"></i>待开始</span>
           </div>
-          <button type="button" class="btn-primary calendar-add-btn" id="add-race-btn" hidden>新增赛程</button>
+          <div class="calendar-admin-actions" id="calendar-admin-actions" hidden>
+            <button type="button" class="btn-ghost" id="sync-schedules-btn">同步官网日程</button>
+            <button type="button" class="btn-ghost" id="sync-finished-results-btn">同步已完赛成绩</button>
+            <button type="button" class="btn-primary calendar-add-btn" id="add-race-btn">新增赛程</button>
+          </div>
         </div>
       </div>
       <div class="race-grid" id="race-grid" aria-live="polite">
         <div class="calendar-empty">正在加载赛程…</div>
       </div>
       <div class="toast" id="calendar-toast"></div>
-      <p class="calendar-source">赛程数据由系统管理员维护，比赛状态根据当前日期自动计算</p>
+      <p class="calendar-source">官网日程统一转换为北京时间（UTC+8），比赛状态按北京时间计算</p>
     </section>
   </div>
 
@@ -209,6 +213,8 @@
     const resultsToast = document.getElementById("results-toast");
     const editResultsButton = document.getElementById("edit-results-btn");
     const syncResultsButton = document.getElementById("sync-results-btn");
+    const syncSchedulesButton = document.getElementById("sync-schedules-btn");
+    const syncFinishedResultsButton = document.getElementById("sync-finished-results-btn");
 
     function showToast(el, message, isError = false) {
       el.textContent = message;
@@ -217,6 +223,17 @@
 
     function localDate(iso, endOfDay = false) {
       return new Date(`${iso}T${endOfDay ? "23:59:59" : "00:00:00"}`);
+    }
+
+    function beijingIsoDate() {
+      const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Shanghai",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).formatToParts(new Date());
+      const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+      return `${values.year}-${values.month}-${values.day}`;
     }
 
     function formatDateRange(startDate, endDate) {
@@ -234,11 +251,11 @@
     }
 
     function getStatuses(events) {
-      const now = new Date();
-      const firstFuture = events.findIndex((event) => now < localDate(event.start_date));
+      const today = beijingIsoDate();
+      const firstFuture = events.findIndex((event) => today < event.start_date);
       return events.map((event, index) => {
-        if (now > localDate(event.end_date, true)) return { key: "finished", label: "已结束" };
-        if (now >= localDate(event.start_date)) return { key: "live", label: "进行中" };
+        if (today > event.end_date) return { key: "finished", label: "已结束" };
+        if (today >= event.start_date) return { key: "live", label: "进行中" };
         if (index === firstFuture) return { key: "next", label: "下一站" };
         return { key: "upcoming", label: "待开始" };
       });
@@ -602,7 +619,7 @@
       document.getElementById("role-tag").textContent = isAdmin ? "超级管理员" : "普通用户";
       document.getElementById("users-link").hidden = !isAdmin;
       document.getElementById("logs-link").hidden = !isAdmin;
-      document.getElementById("add-race-btn").hidden = !isAdmin;
+      document.getElementById("calendar-admin-actions").hidden = !isAdmin;
       await loadEvents();
     }
 
@@ -611,6 +628,53 @@
       renderCalendar();
     });
     document.getElementById("add-race-btn").addEventListener("click", openCreateModal);
+    syncSchedulesButton.addEventListener("click", async () => {
+      if (!isAdmin || !selectedSeason) return;
+      if (!confirm(`确认从 MotoGP 官网同步 ${selectedSeason} 赛季全部分站日程吗？官网时间会统一转换为北京时间。`)) return;
+      const originalText = syncSchedulesButton.textContent;
+      syncSchedulesButton.disabled = true;
+      syncSchedulesButton.textContent = "正在同步…";
+      showToast(calendarToast, "正在读取 MotoGP 官方赛程并转换为北京时间…");
+      try {
+        const result = await apiRequest(`${RACE_API}/schedules/sync`, {
+          method: "POST",
+          body: JSON.stringify({ season: selectedSeason }),
+        });
+        const summary = result.data || {};
+        showToast(calendarToast, `同步完成：${summary.events || 0} 个分站、${summary.items || 0} 个日程环节，时间均为北京时间`);
+      } catch (err) {
+        showToast(calendarToast, err.message, true);
+      } finally {
+        syncSchedulesButton.disabled = false;
+        syncSchedulesButton.textContent = originalText;
+      }
+    });
+    syncFinishedResultsButton.addEventListener("click", async () => {
+      if (!isAdmin || !selectedSeason) return;
+      if (!confirm(`确认一次性同步 ${selectedSeason} 赛季所有已完赛分站的冲刺赛和正赛成绩吗？该操作会按官网数据更新已有排名。`)) return;
+      const originalText = syncFinishedResultsButton.textContent;
+      syncFinishedResultsButton.disabled = true;
+      syncFinishedResultsButton.textContent = "正在同步…";
+      showToast(calendarToast, "正在读取并更新所有已完赛分站成绩，请稍候…");
+      try {
+        const result = await apiRequest(`${RACE_API}/results/sync-finished`, {
+          method: "POST",
+          body: JSON.stringify({ season: selectedSeason }),
+        });
+        const summary = result.data || {};
+        const failures = summary.failures || [];
+        showToast(
+          calendarToast,
+          `批量同步完成：${summary.synced_events || 0} 个分站、${summary.synced_types || 0} 场比赛、匹配 ${summary.matched || 0} 条成绩${summary.skipped ? `、跳过 ${summary.skipped} 条` : ""}${failures.length ? `；${failures.length} 项未完成` : ""}`,
+          failures.length > 0
+        );
+      } catch (err) {
+        showToast(calendarToast, err.message, true);
+      } finally {
+        syncFinishedResultsButton.disabled = false;
+        syncFinishedResultsButton.textContent = originalText;
+      }
+    });
     document.getElementById("race-modal-close").addEventListener("click", closeModal);
     document.getElementById("race-cancel-btn").addEventListener("click", closeModal);
     modal.addEventListener("click", (event) => { if (event.target === modal) closeModal(); });
