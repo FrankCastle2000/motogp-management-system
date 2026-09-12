@@ -125,6 +125,7 @@ def init_database():
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     name VARCHAR(128) NOT NULL UNIQUE COMMENT '车队名称',
                     manufacturer VARCHAR(128) NOT NULL COMMENT '车辆制造商',
+                    official_team_id VARCHAR(64) DEFAULT NULL COMMENT 'MotoGP 官网车队标识',
                     version INT NOT NULL DEFAULT 1 COMMENT '并发控制版本号',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -136,6 +137,7 @@ def init_database():
                 CREATE TABLE IF NOT EXISTS riders (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     rider_number VARCHAR(16) NOT NULL COMMENT '车手编号',
+                    official_rider_id VARCHAR(64) DEFAULT NULL COMMENT 'MotoGP 官网车手标识',
                     english_name VARCHAR(128) NOT NULL COMMENT '英文名',
                     chinese_name VARCHAR(64) NOT NULL COMMENT '中文名',
                     nickname VARCHAR(64) DEFAULT NULL COMMENT '昵称',
@@ -322,6 +324,21 @@ def init_database():
                 cur.execute(
                     "ALTER TABLE riders ADD UNIQUE INDEX uq_riders_rider_number (rider_number)"
                 )
+            for table_name, column_name, after_column, comment, index_name in (
+                ("teams", "official_team_id", "manufacturer", "MotoGP 官网车队标识", "uq_teams_official_id"),
+                ("riders", "official_rider_id", "rider_number", "MotoGP 官网车手标识", "uq_riders_official_id"),
+            ):
+                cur.execute(f"SHOW COLUMNS FROM {table_name} LIKE %s", (column_name,))
+                if not cur.fetchone():
+                    cur.execute(
+                        f"ALTER TABLE {table_name} ADD COLUMN {column_name} "
+                        f"VARCHAR(64) DEFAULT NULL COMMENT '{comment}' AFTER {after_column}"
+                    )
+                cur.execute(f"SHOW INDEX FROM {table_name} WHERE Key_name = %s", (index_name,))
+                if not cur.fetchone():
+                    cur.execute(
+                        f"ALTER TABLE {table_name} ADD UNIQUE INDEX {index_name} ({column_name})"
+                    )
             for table_name in (
                 "users", "teams", "riders", "race_events", "race_schedule_sets",
                 "rider_standings", "race_result_sets",
@@ -1084,6 +1101,215 @@ def create_official_riders(profiles: list[dict], operator_id=None, operator_user
     except pymysql.err.IntegrityError as exc:
         conn.rollback()
         raise ValueError("官网车手编号与本地数据冲突") from exc
+    finally:
+        conn.close()
+
+
+def sync_official_roster(
+    official_teams: list[dict],
+    profiles: list[dict],
+    operator_id=None,
+    operator_username="",
+):
+    """先同步官网车队，再按官网稳定标识或车号新增、更新车手资料。"""
+    country_names = {
+        "AR": "阿根廷", "AU": "澳大利亚", "BR": "巴西", "CH": "瑞士",
+        "CZ": "捷克", "DE": "德国", "ES": "西班牙", "FI": "芬兰",
+        "FR": "法国", "GB": "英国", "ID": "印度尼西亚", "IE": "爱尔兰",
+        "IT": "意大利", "JP": "日本", "MY": "马来西亚", "NL": "荷兰",
+        "PT": "葡萄牙", "TH": "泰国", "TR": "土耳其", "US": "美国",
+        "ZA": "南非",
+    }
+
+    def normalize(value):
+        return " ".join(re.findall(r"[a-z0-9]+", str(value).lower()))
+
+    summary = {
+        "teams": {"official_total": len(official_teams), "created": 0, "updated": 0, "unchanged": 0},
+        "riders": {"official_total": len(profiles), "created": 0, "updated": 0, "unchanged": 0},
+    }
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            for official_team in official_teams:
+                official_id = str(official_team.get("official_team_id") or "").strip() or None
+                name = str(official_team.get("name") or "").strip()
+                manufacturer = str(official_team.get("manufacturer") or "未知").strip() or "未知"
+                if not name:
+                    continue
+
+                existing = None
+                if official_id:
+                    cur.execute(
+                        "SELECT id, name, manufacturer, official_team_id FROM teams "
+                        "WHERE official_team_id = %s",
+                        (official_id,),
+                    )
+                    existing = cur.fetchone()
+                if not existing:
+                    cur.execute(
+                        "SELECT id, name, manufacturer, official_team_id FROM teams"
+                    )
+                    existing = next(
+                        (row for row in cur.fetchall() if normalize(row["name"]) == normalize(name)),
+                        None,
+                    )
+
+                if not existing:
+                    cur.execute(
+                        "INSERT INTO teams (name, manufacturer, official_team_id) VALUES (%s, %s, %s)",
+                        (name, manufacturer, official_id),
+                    )
+                    team = _fetch_team(cur, cur.lastrowid)
+                    summary["teams"]["created"] += 1
+                    _insert_operation_log(
+                        cur, operator_id, operator_username, "create", "team",
+                        team["id"], team["name"], after_data=team,
+                    )
+                    continue
+
+                next_official_id = official_id or existing.get("official_team_id")
+                changed = (
+                    existing["name"] != name
+                    or existing["manufacturer"] != manufacturer
+                    or existing.get("official_team_id") != next_official_id
+                )
+                if not changed:
+                    summary["teams"]["unchanged"] += 1
+                    continue
+                before = _fetch_team(cur, existing["id"])
+                cur.execute(
+                    "UPDATE teams SET name = %s, manufacturer = %s, official_team_id = %s, "
+                    "version = version + 1 WHERE id = %s",
+                    (name, manufacturer, next_official_id, existing["id"]),
+                )
+                team = _fetch_team(cur, existing["id"])
+                summary["teams"]["updated"] += 1
+                _insert_operation_log(
+                    cur, operator_id, operator_username, "update", "team",
+                    team["id"], team["name"], before_data=before, after_data=team,
+                )
+
+            cur.execute("SELECT id, name, manufacturer, official_team_id FROM teams")
+            teams = list(cur.fetchall())
+            teams_by_official_id = {
+                row["official_team_id"]: row["id"]
+                for row in teams if row.get("official_team_id")
+            }
+            teams_by_name = {normalize(row["name"]): row["id"] for row in teams}
+
+            for profile in profiles:
+                number = str(profile.get("rider_number") or "").strip()
+                official_rider_id = str(profile.get("official_rider_id") or "").strip() or None
+                if not number or not official_rider_id:
+                    continue
+                team_id = teams_by_official_id.get(
+                    str(profile.get("official_team_id") or "").strip()
+                ) or teams_by_name.get(normalize(profile.get("team_name") or ""))
+                nationality = country_names.get(
+                    str(profile.get("country_iso") or "").upper(),
+                    profile.get("nationality") or "未知",
+                )
+                birth_city = str(profile.get("birth_place") or "未知").strip() or "未知"
+                official_country = str(profile.get("nationality") or "").strip()
+                birth_place = (
+                    f"{birth_city}, {official_country}"
+                    if birth_city != "未知" and official_country
+                    else birth_city
+                )
+
+                by_official_id = None
+                cur.execute(
+                    "SELECT id FROM riders WHERE official_rider_id = %s",
+                    (official_rider_id,),
+                )
+                by_official_id = cur.fetchone()
+                cur.execute("SELECT id FROM riders WHERE rider_number = %s", (number,))
+                by_number = cur.fetchone()
+                if by_official_id and by_number and by_official_id["id"] != by_number["id"]:
+                    raise ValueError(f"官网车手 #{number} 与本地车号记录冲突")
+                existing_id = (by_official_id or by_number or {}).get("id")
+
+                english_name = str(profile.get("english_name") or "未知车手").strip()
+                nickname = str(profile.get("nickname") or "").strip() or None
+                bike = str(profile.get("bike") or "未知").strip() or "未知"
+                birth_date = str(profile.get("birth_date") or "1900-01-01")[:10]
+                official_chinese_name = str(
+                    profile.get("chinese_name") or english_name
+                ).strip()
+
+                if not existing_id:
+                    cur.execute(
+                        """
+                        INSERT INTO riders
+                            (rider_number, official_rider_id, english_name, chinese_name,
+                             nickname, nationality, team_id, bike, birth_date, birth_place)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            number, official_rider_id, english_name, official_chinese_name,
+                            nickname, nationality, team_id, bike, birth_date, birth_place,
+                        ),
+                    )
+                    rider = _fetch_rider(cur, cur.lastrowid)
+                    summary["riders"]["created"] += 1
+                    _insert_operation_log(
+                        cur, operator_id, operator_username, "create", "rider",
+                        rider["id"], rider["english_name"], after_data=rider,
+                    )
+                    continue
+
+                before = _fetch_rider(cur, existing_id)
+                chinese_name = before["chinese_name"]
+                if not chinese_name or chinese_name in ("未知", before["english_name"]):
+                    chinese_name = official_chinese_name
+                desired = {
+                    "rider_number": number,
+                    "english_name": english_name,
+                    "chinese_name": chinese_name,
+                    "nickname": nickname or "",
+                    "nationality": nationality,
+                    "team_id": team_id,
+                    "bike": bike,
+                    "birth_date": birth_date,
+                    "birth_place": birth_place,
+                }
+                changed = any(before.get(key) != value for key, value in desired.items())
+                cur.execute(
+                    "SELECT official_rider_id FROM riders WHERE id = %s", (existing_id,)
+                )
+                stored_official_id = cur.fetchone().get("official_rider_id")
+                changed = changed or stored_official_id != official_rider_id
+                if not changed:
+                    summary["riders"]["unchanged"] += 1
+                    continue
+                cur.execute(
+                    """
+                    UPDATE riders
+                    SET rider_number = %s, official_rider_id = %s, english_name = %s,
+                        chinese_name = %s, nickname = %s, nationality = %s, team_id = %s,
+                        bike = %s, birth_date = %s, birth_place = %s, version = version + 1
+                    WHERE id = %s
+                    """,
+                    (
+                        number, official_rider_id, english_name, chinese_name, nickname,
+                        nationality, team_id, bike, birth_date, birth_place, existing_id,
+                    ),
+                )
+                rider = _fetch_rider(cur, existing_id)
+                summary["riders"]["updated"] += 1
+                _insert_operation_log(
+                    cur, operator_id, operator_username, "update", "rider",
+                    rider["id"], rider["english_name"], before_data=before, after_data=rider,
+                )
+        conn.commit()
+        return summary
+    except pymysql.err.IntegrityError as exc:
+        conn.rollback()
+        raise ValueError("官网车手或车队与本地唯一字段冲突") from exc
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

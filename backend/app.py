@@ -530,6 +530,53 @@ def api_delete_team(team_id: int):
     return jsonify({"ok": True, "message": "删除成功"})
 
 
+@app.post("/api/roster/sync")
+@admin_required
+def api_sync_official_roster():
+    """从 MotoGP 官方接口同步指定赛季的车队和车手资料。"""
+    body = request.get_json(silent=True) or {}
+    try:
+        season = int(body.get("season", date.today().year))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "message": "赛季年份无效"}), 400
+    if not 1949 <= season <= 2100:
+        return jsonify({"ok": False, "message": "赛季年份无效"}), 400
+
+    sync_key = f"motogp-roster:{season}"
+    db.reserve_external_sync(
+        sync_key,
+        MOTOGP_SYNC_COOLDOWN_SECONDS,
+        failure_cooldown_seconds=min(300, MOTOGP_SYNC_COOLDOWN_SECONDS),
+    )
+    try:
+        official = motogp_sync.fetch_season_roster(season)
+        summary = db.sync_official_roster(
+            official["teams"],
+            official["riders"],
+            operator_id=session.get("user_id"),
+            operator_username=session.get("username", ""),
+        )
+        summary.update({
+            "season": season,
+            "official": official["official"],
+            "source_file": official["source_file"],
+            "failed_profiles": official["failed_profiles"],
+            "cooldown_seconds": MOTOGP_SYNC_COOLDOWN_SECONDS,
+        })
+        db.finish_external_sync(
+            sync_key,
+            True,
+            (
+                f"车队新增 {summary['teams']['created']}、更新 {summary['teams']['updated']}；"
+                f"车手新增 {summary['riders']['created']}、更新 {summary['riders']['updated']}"
+            ),
+        )
+        return jsonify({"ok": True, "data": summary, "message": "官方车手与车队同步完成"})
+    except Exception as exc:
+        db.finish_external_sync(sync_key, False, str(exc))
+        raise
+
+
 def _parse_race_event_body(body):
     """校验赛程新增和修改接口共用的 JSON 字段。"""
     try:
@@ -955,8 +1002,19 @@ def api_sync_rider_standings():
     if not 1949 <= season <= 2100:
         return jsonify({"ok": False, "message": "赛季年份无效"}), 400
 
+    if not db.list_riders():
+        return jsonify({
+            "ok": False,
+            "message": "尚未导入车手资料，请先到“车手信息”或“车队信息”页面同步官网车队与车手",
+            "code": "ROSTER_REQUIRED",
+        }), 400
+
     sync_key = f"motogp-rider-standings:{season}"
-    db.reserve_external_sync(sync_key, MOTOGP_SYNC_COOLDOWN_SECONDS)
+    db.reserve_external_sync(
+        sync_key,
+        MOTOGP_SYNC_COOLDOWN_SECONDS,
+        failure_cooldown_seconds=min(300, MOTOGP_SYNC_COOLDOWN_SECONDS),
+    )
     try:
         official = motogp_sync.fetch_rider_standings(season)
         summary = db.sync_rider_standings(

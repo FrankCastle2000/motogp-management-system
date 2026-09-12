@@ -94,7 +94,10 @@
     <section class="panel rider-list-panel">
       <div class="panel-heading">
         <h2>车手总览</h2>
-        <button type="button" class="btn-primary btn-add" id="add-rider-btn" hidden>新增车手</button>
+        <div class="entity-admin-actions" id="rider-admin-actions" hidden>
+          <button type="button" class="btn-ghost" id="sync-roster-btn">同步官网车队与车手</button>
+          <button type="button" class="btn-primary btn-add" id="add-rider-btn">新增车手</button>
+        </div>
       </div>
       <form class="filter-bar rider-filter-bar" id="rider-filter-form">
         <input id="filter-rider-number" placeholder="车手编号" aria-label="按车手编号搜索" />
@@ -173,6 +176,7 @@
     const toast = document.getElementById("toast");
     const draftHint = document.getElementById("draft-hint");
     const listToast = document.getElementById("list-toast");
+    const syncRosterBtn = document.getElementById("sync-roster-btn");
     const tbody = document.getElementById("rider-tbody");
     const opsTh = document.getElementById("ops-th");
 
@@ -406,7 +410,7 @@
 
       await loadTeams();
       if (isAdmin) {
-        addBtn.hidden = false;
+        document.getElementById("rider-admin-actions").hidden = false;
         document.getElementById("users-link").hidden = false;
         document.getElementById("logs-link").hidden = false;
       } else {
@@ -417,6 +421,38 @@
     }
 
     document.getElementById("logout-btn").addEventListener("click", () => logout());
+
+    syncRosterBtn.addEventListener("click", async () => {
+      if (!isAdmin) return;
+      const season = new Date().getFullYear();
+      if (!confirm(`确认从 MotoGP 官网同步 ${season} 赛季车队和车手资料吗？本地同一对象会更新，手工填写的中文名会保留。`)) return;
+      const originalText = syncRosterBtn.textContent;
+      syncRosterBtn.disabled = true;
+      syncRosterBtn.textContent = "正在同步…";
+      showToast(listToast, "正在读取 MotoGP 官方车队与车手资料…");
+      try {
+        const result = await apiRequest("/api/roster/sync", {
+          method: "POST",
+          body: JSON.stringify({ season }),
+        });
+        await loadTeams();
+        await loadRiders();
+        const summary = result.data || {};
+        const teamsSummary = summary.teams || {};
+        const ridersSummary = summary.riders || {};
+        const failed = summary.failed_profiles || [];
+        showToast(
+          listToast,
+          `同步完成：车队新增 ${teamsSummary.created || 0}、更新 ${teamsSummary.updated || 0}；车手新增 ${ridersSummary.created || 0}、更新 ${ridersSummary.updated || 0}${failed.length ? `；${failed.length} 名车手详情读取失败` : ""}`,
+          failed.length > 0
+        );
+      } catch (err) {
+        showToast(listToast, err.message, true);
+      } finally {
+        syncRosterBtn.disabled = false;
+        syncRosterBtn.textContent = originalText;
+      }
+    });
 
     document.querySelectorAll("[data-sort-key]").forEach((button) => {
       button.addEventListener("click", () => {

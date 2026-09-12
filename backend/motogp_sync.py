@@ -1,6 +1,7 @@
 """MotoGP 官方积分榜、分站赛果与比赛日程的低频同步客户端。"""
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from urllib.error import HTTPError, URLError
@@ -18,6 +19,29 @@ class OfficialApiError(ValueError):
 
 
 OFFICIAL_RIDER_CHINESE_NAMES = {
+    "Ai Ogura": "小椋蓝",
+    "Alex Marquez": "亚历克斯·马奎斯",
+    "Alex Rins": "亚历克斯·林斯",
+    "Brad Binder": "布拉德·宾德",
+    "Diogo Moreira": "迪奥戈·莫雷拉",
+    "Enea Bastianini": "埃内亚·巴斯蒂亚尼尼",
+    "Fabio Di Giannantonio": "法比奥·迪·詹南托尼奥",
+    "Fabio Quartararo": "法比奥·夸塔拉罗",
+    "Fermin Aldeguer": "费尔明·阿尔德格尔",
+    "Francesco Bagnaia": "弗朗切斯科·巴尼亚亚",
+    "Franco Morbidelli": "弗兰科·莫比德利",
+    "Jack Miller": "杰克·米勒",
+    "Joan Mir": "胡安·米尔",
+    "Johann Zarco": "约翰·扎尔科",
+    "Jorge Martin": "乔治·马丁",
+    "Luca Marini": "卢卡·马里尼",
+    "Marc Marquez": "马克·马奎斯",
+    "Marco Bezzecchi": "马尔科·贝泽基",
+    "Maverick Vinales": "马弗里克·比尼亚莱斯",
+    "Maverick Viñales": "马弗里克·比尼亚莱斯",
+    "Pedro Acosta": "佩德罗·阿科斯塔",
+    "Raul Fernandez": "劳尔·费尔南德斯",
+    "Toprak Razgatlioglu": "托普拉克·拉兹加特勒奥卢",
     "Michele Pirro": "米凯莱·皮罗",
     "Augusto Fernandez": "奥古斯托·费尔南德斯",
     "Jonas Folger": "乔纳斯·福尔格",
@@ -38,7 +62,7 @@ def _get_json(path: str, params=None):
             "Accept": "application/json",
             "Origin": "https://www.motogp.com",
             "Referer": "https://www.motogp.com/",
-            "User-Agent": "MotoGP-Management-System/1.0 (manual results sync)",
+            "User-Agent": "MotoGP-Management-System/1.0 (manual official data sync)",
         },
     )
     try:
@@ -434,10 +458,116 @@ def fetch_rider_profile(rider_api_id: str, season_year: int, appearance: dict):
         "country_iso": str((profile.get("country") or {}).get("iso") or appearance.get("country_iso") or ""),
         "nationality": str((profile.get("country") or {}).get("name") or appearance.get("country_name") or "未知"),
         "team_name": str(
-            season_entry.get("sponsored_team") or team.get("name") or appearance.get("team_name") or ""
+            team.get("name") or season_entry.get("sponsored_team") or appearance.get("team_name") or ""
         ),
         "bike": str(constructor.get("name") or appearance.get("manufacturer") or "未知"),
         "birth_date": str(profile.get("birth_date") or "1900-01-01")[:10],
         "birth_place": str(profile.get("birth_city") or "未知"),
         "official_rider_id": rider_api_id,
+        "official_team_id": str(team.get("id") or ""),
+    }
+
+
+def fetch_season_roster(season_year: int):
+    """读取指定赛季 MotoGP 车手详情及其官方车队资料。
+
+    积分接口提供当季全部参赛车手、车号和制造商；车手详情接口补充出生信息、
+    昵称以及不受赞助冠名变化影响的车队标识。详情请求并发数保持较低，避免对
+    官方公开接口造成突发压力。
+    """
+    season, category = _find_season_and_motogp_category(season_year)
+    result = _get_json(
+        "/v2/results/world-standings",
+        {
+            "type": "rider",
+            "season": season["id"],
+            "category": category["id"],
+        },
+    )
+    classification = (result.get("classification") or {}).get("rider") or []
+    if not classification:
+        raise OfficialApiError("官方接口没有返回车手名单")
+
+    appearances = []
+    seen_numbers = set()
+    for item in classification:
+        rider = item.get("rider") or {}
+        number = rider.get("number")
+        rider_api_id = str(
+            rider.get("riders_api_uuid") or rider.get("riders_id") or ""
+        ).strip()
+        if number is None or not rider_api_id:
+            continue
+        number = str(number).strip()
+        if not number or number in seen_numbers:
+            continue
+        seen_numbers.add(number)
+        appearances.append({
+            "rider_number": number,
+            "official_name": str(rider.get("full_name") or "").strip(),
+            "rider_api_id": rider_api_id,
+            "country_iso": str((rider.get("country") or {}).get("iso") or ""),
+            "country_name": str((rider.get("country") or {}).get("name") or ""),
+            "team_name": str(item.get("team_name") or "").strip(),
+            "manufacturer": str((item.get("constructor") or {}).get("name") or "").strip(),
+        })
+    if not appearances:
+        raise OfficialApiError("官方车手名单缺少可用的车手标识")
+
+    profiles = []
+    failures = []
+    worker_count = min(4, len(appearances))
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        pending = {
+            executor.submit(
+                fetch_rider_profile,
+                appearance["rider_api_id"],
+                season_year,
+                appearance,
+            ): appearance
+            for appearance in appearances
+        }
+        for future in as_completed(pending):
+            appearance = pending[future]
+            try:
+                profiles.append(future.result())
+            except OfficialApiError as exc:
+                failures.append({
+                    "rider_number": appearance["rider_number"],
+                    "official_name": appearance["official_name"],
+                    "message": str(exc),
+                })
+
+    if not profiles:
+        raise OfficialApiError("未能读取任何官方车手详情")
+    profiles.sort(
+        key=lambda row: (
+            int(row["rider_number"]) if str(row["rider_number"]).isdigit() else 9999,
+            str(row["rider_number"]),
+        )
+    )
+
+    teams_by_key = {}
+    for profile in profiles:
+        team_name = str(profile.get("team_name") or "").strip()
+        if not team_name:
+            continue
+        official_team_id = str(profile.get("official_team_id") or "").strip()
+        key = official_team_id or team_name.casefold()
+        teams_by_key[key] = {
+            "official_team_id": official_team_id,
+            "name": team_name,
+            "manufacturer": str(profile.get("bike") or "未知").strip() or "未知",
+        }
+    teams = sorted(teams_by_key.values(), key=lambda row: row["name"].casefold())
+    if not teams:
+        raise OfficialApiError("官方车手资料中没有有效车队信息")
+
+    return {
+        "season": season_year,
+        "official": bool(result.get("official")),
+        "source_file": (result.get("files") or {}).get("pdf"),
+        "riders": profiles,
+        "teams": teams,
+        "failed_profiles": failures,
     }

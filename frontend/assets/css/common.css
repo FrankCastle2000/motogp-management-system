@@ -1123,6 +1123,19 @@ header.page-header p {
   flex: 0 0 auto;
 }
 
+.entity-admin-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  flex: 0 0 auto;
+}
+
+.entity-admin-actions button {
+  width: auto;
+  white-space: nowrap;
+}
+
 .filter-bar {
   display: flex;
   align-items: center;
@@ -1891,6 +1904,10 @@ tbody tr:hover {
   .panel-heading .btn-add {
     min-width: auto;
     padding: 8px 12px;
+  }
+
+  .entity-admin-actions {
+    flex-wrap: wrap;
   }
 
   .filter-bar input,
