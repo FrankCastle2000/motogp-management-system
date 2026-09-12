@@ -259,7 +259,9 @@
         const scheduleAction = `<button type="button" class="btn-result" data-view-schedule="${event.id}">查看比赛日程</button>`;
         const resultAction = status.key === "finished"
           ? `<button type="button" class="btn-result" data-view-results="${event.id}">查看排名</button>`
-          : "";
+          : (isAdmin
+            ? `<button type="button" class="btn-result" data-manage-results="${event.id}">录入排名</button>`
+            : "");
         const adminActions = isAdmin ? `
             <button type="button" class="btn-edit" data-edit-race="${event.id}">编辑</button>
             <button type="button" class="btn-danger" data-delete-race="${event.id}">删除</button>` : "";
@@ -761,9 +763,10 @@
     });
 
     grid.addEventListener("click", async (event) => {
-      const resultsBtn = event.target.closest("[data-view-results]");
+      const resultsBtn = event.target.closest("[data-view-results], [data-manage-results]");
       if (resultsBtn) {
-        const race = eventsById.get(resultsBtn.dataset.viewResults);
+        const raceId = resultsBtn.dataset.viewResults || resultsBtn.dataset.manageResults;
+        const race = eventsById.get(raceId);
         if (race) await openResultsModal(race);
         return;
       }
