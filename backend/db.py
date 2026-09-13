@@ -121,6 +121,23 @@ def init_database():
             )
             cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS seasons (
+                    year SMALLINT PRIMARY KEY COMMENT '赛季年份',
+                    roster_complete TINYINT(1) NOT NULL DEFAULT 0 COMMENT '当季车手车队名单是否确认完成',
+                    version INT NOT NULL DEFAULT 1 COMMENT '并发控制版本号',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+            for column_name, definition in (
+                ("roster_complete", "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '当季名单是否确认完成'"),
+                ("version", "INT NOT NULL DEFAULT 1 COMMENT '并发控制版本号'"),
+            ):
+                cur.execute("SHOW COLUMNS FROM seasons LIKE %s", (column_name,))
+                if not cur.fetchone():
+                    cur.execute(f"ALTER TABLE seasons ADD COLUMN {column_name} {definition}")
+            cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS teams (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     name VARCHAR(128) NOT NULL UNIQUE COMMENT '车队名称',
@@ -140,7 +157,6 @@ def init_database():
                     official_rider_id VARCHAR(64) DEFAULT NULL COMMENT 'MotoGP 官网车手标识',
                     english_name VARCHAR(128) NOT NULL COMMENT '英文名',
                     chinese_name VARCHAR(64) NOT NULL COMMENT '中文名',
-                    nickname VARCHAR(64) DEFAULT NULL COMMENT '昵称',
                     nationality VARCHAR(64) NOT NULL COMMENT '国籍',
                     team_id INT DEFAULT NULL COMMENT '所属车队',
                     bike VARCHAR(128) NOT NULL COMMENT '驾驶车辆',
@@ -154,6 +170,91 @@ def init_database():
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS rider_name_translations (
+                    rider_id INT PRIMARY KEY COMMENT '基础车手ID',
+                    chinese_name VARCHAR(64) NOT NULL COMMENT '全赛季统一中文名',
+                    source ENUM('existing', 'manual', 'official', 'fallback')
+                        NOT NULL DEFAULT 'fallback' COMMENT '译名来源',
+                    is_reviewed TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否经管理员确认',
+                    updated_by INT DEFAULT NULL COMMENT '最后确认管理员ID',
+                    version INT NOT NULL DEFAULT 1 COMMENT '并发控制版本号',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    CONSTRAINT fk_rider_translation_rider FOREIGN KEY (rider_id)
+                        REFERENCES riders(id) ON DELETE CASCADE,
+                    CONSTRAINT fk_rider_translation_user FOREIGN KEY (updated_by)
+                        REFERENCES users(id) ON DELETE SET NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+            cur.execute("SHOW COLUMNS FROM riders LIKE 'nickname'")
+            if cur.fetchone():
+                cur.execute("ALTER TABLE riders DROP COLUMN nickname")
+            cur.execute("SHOW TABLES LIKE 'season_teams'")
+            season_roster_tables_existed = bool(cur.fetchone())
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS season_teams (
+                    season SMALLINT NOT NULL COMMENT '赛季年份',
+                    team_id INT NOT NULL COMMENT '基础车队ID',
+                    manufacturer VARCHAR(128) NOT NULL COMMENT '当季车辆制造商',
+                    version INT NOT NULL DEFAULT 1 COMMENT '并发控制版本号',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    PRIMARY KEY (season, team_id),
+                    CONSTRAINT fk_season_team_season FOREIGN KEY (season)
+                        REFERENCES seasons(year) ON DELETE CASCADE,
+                    CONSTRAINT fk_season_team_team FOREIGN KEY (team_id)
+                        REFERENCES teams(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS season_riders (
+                    season SMALLINT NOT NULL COMMENT '赛季年份',
+                    rider_id INT NOT NULL COMMENT '基础车手ID',
+                    rider_number VARCHAR(16) NOT NULL COMMENT '当季车手编号',
+                    team_id INT DEFAULT NULL COMMENT '当季所属车队',
+                    bike VARCHAR(128) NOT NULL COMMENT '当季驾驶车辆',
+                    version INT NOT NULL DEFAULT 1 COMMENT '并发控制版本号',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    PRIMARY KEY (season, rider_id),
+                    UNIQUE KEY uq_season_riders_number (season, rider_number),
+                    INDEX idx_season_riders_team (season, team_id),
+                    CONSTRAINT fk_season_rider_season FOREIGN KEY (season)
+                        REFERENCES seasons(year) ON DELETE CASCADE,
+                    CONSTRAINT fk_season_rider_rider FOREIGN KEY (rider_id)
+                        REFERENCES riders(id) ON DELETE CASCADE,
+                    CONSTRAINT fk_season_rider_team FOREIGN KEY (season, team_id)
+                        REFERENCES season_teams(season, team_id) ON DELETE RESTRICT
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
+            cur.execute("SHOW COLUMNS FROM season_riders LIKE 'rider_number'")
+            if not cur.fetchone():
+                cur.execute(
+                    "ALTER TABLE season_riders ADD COLUMN rider_number VARCHAR(16) NULL "
+                    "COMMENT '当季车手编号' AFTER rider_id"
+                )
+                cur.execute(
+                    """UPDATE season_riders sr JOIN riders r ON r.id=sr.rider_id
+                       SET sr.rider_number=r.rider_number
+                       WHERE sr.rider_number IS NULL OR TRIM(sr.rider_number)=''"""
+                )
+                cur.execute(
+                    "ALTER TABLE season_riders MODIFY COLUMN rider_number VARCHAR(16) NOT NULL "
+                    "COMMENT '当季车手编号'"
+                )
+            cur.execute("SHOW INDEX FROM season_riders WHERE Key_name='uq_season_riders_number'")
+            if not cur.fetchone():
+                cur.execute(
+                    "ALTER TABLE season_riders ADD UNIQUE INDEX uq_season_riders_number "
+                    "(season, rider_number)"
+                )
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS race_events (
@@ -313,17 +414,8 @@ def init_database():
                     "ALTER TABLE riders MODIFY COLUMN rider_number VARCHAR(16) NOT NULL COMMENT '车手编号'"
                 )
             cur.execute("SHOW INDEX FROM riders WHERE Key_name = 'uq_riders_rider_number'")
-            if not cur.fetchone():
-                cur.execute(
-                    "SELECT rider_number, COUNT(*) AS count FROM riders "
-                    "GROUP BY rider_number HAVING COUNT(*) > 1 LIMIT 1"
-                )
-                duplicate = cur.fetchone()
-                if duplicate:
-                    raise ValueError(f"车手编号 {duplicate['rider_number']} 存在重复，无法创建唯一约束")
-                cur.execute(
-                    "ALTER TABLE riders ADD UNIQUE INDEX uq_riders_rider_number (rider_number)"
-                )
+            if cur.fetchone():
+                cur.execute("ALTER TABLE riders DROP INDEX uq_riders_rider_number")
             for table_name, column_name, after_column, comment, index_name in (
                 ("teams", "official_team_id", "manufacturer", "MotoGP 官网车队标识", "uq_teams_official_id"),
                 ("riders", "official_rider_id", "rider_number", "MotoGP 官网车手标识", "uq_riders_official_id"),
@@ -407,6 +499,40 @@ def init_database():
                         for season, position, rider_number, points, race_wins, podiums
                         in RIDER_STANDING_SEED
                     ],
+                )
+            cur.execute(
+                """
+                INSERT IGNORE INTO seasons (year)
+                SELECT DISTINCT season FROM race_events
+                UNION
+                SELECT DISTINCT season FROM rider_standings
+                """
+            )
+            cur.execute(
+                """
+                INSERT IGNORE INTO rider_name_translations
+                    (rider_id, chinese_name, source, is_reviewed)
+                SELECT id, chinese_name,
+                       CASE WHEN chinese_name = english_name OR chinese_name IN ('未知', '')
+                            THEN 'fallback' ELSE 'existing' END,
+                       CASE WHEN chinese_name = english_name OR chinese_name IN ('未知', '')
+                            THEN 0 ELSE 1 END
+                FROM riders
+                """
+            )
+            if not season_roster_tables_existed:
+                cur.execute(
+                    """
+                    INSERT IGNORE INTO season_teams (season, team_id, manufacturer)
+                    SELECT 2026, id, manufacturer FROM teams
+                    """
+                )
+                cur.execute(
+                    """
+                    INSERT IGNORE INTO season_riders
+                        (season, rider_id, rider_number, team_id, bike)
+                    SELECT 2026, id, rider_number, team_id, bike FROM riders
+                    """
                 )
             cur.execute("SELECT id FROM users WHERE username = %s", (ADMIN_USERNAME,))
             if not cur.fetchone():
@@ -651,15 +777,53 @@ def _format_datetime(value):
     return str(value)
 
 
+def _set_canonical_chinese_name(
+    cur,
+    rider_id: int,
+    chinese_name: str,
+    *,
+    source: str,
+    reviewed: bool,
+    updated_by=None,
+):
+    """维护车手身份级标准中文名；未审核的自动结果不得覆盖已审核译名。"""
+    name = str(chinese_name or "").strip()
+    if not name:
+        return
+    cur.execute(
+        "SELECT chinese_name, is_reviewed FROM rider_name_translations WHERE rider_id=%s",
+        (rider_id,),
+    )
+    existing = cur.fetchone()
+    if existing and existing["is_reviewed"] and not reviewed:
+        return
+    cur.execute(
+        """
+        INSERT INTO rider_name_translations
+            (rider_id, chinese_name, source, is_reviewed, updated_by)
+        VALUES (%s,%s,%s,%s,%s)
+        ON DUPLICATE KEY UPDATE
+            version=version + IF(chinese_name <> VALUES(chinese_name)
+                OR source <> VALUES(source) OR is_reviewed <> VALUES(is_reviewed), 1, 0),
+            chinese_name=VALUES(chinese_name), source=VALUES(source),
+            is_reviewed=VALUES(is_reviewed), updated_by=VALUES(updated_by)
+        """,
+        (rider_id, name, source, 1 if reviewed else 0, updated_by if reviewed else None),
+    )
+    # 保留旧字段作为兼容镜像，所有历史赛季仍通过同一 rider_id 取得该名称。
+    cur.execute("UPDATE riders SET chinese_name=%s WHERE id=%s", (name, rider_id))
+
+
 def _serialize_rider(row):
     if not row:
         return None
-    return {
+    result = {
         "id": row["id"],
         "rider_number": row["rider_number"],
         "english_name": row["english_name"],
         "chinese_name": row["chinese_name"],
-        "nickname": row["nickname"] or "",
+        "chinese_name_source": row.get("chinese_name_source") or "existing",
+        "chinese_name_reviewed": bool(row.get("chinese_name_reviewed", True)),
         "nationality": row["nationality"],
         "team_id": row["team_id"],
         "team_name": row.get("team_name") or "",
@@ -669,12 +833,15 @@ def _serialize_rider(row):
         "version": row["version"],
         "updated_at": _format_datetime(row["updated_at"]),
     }
+    if row.get("season") is not None:
+        result["season"] = int(row["season"])
+    return result
 
 
 def _serialize_team(row):
     if not row:
         return None
-    return {
+    result = {
         "id": row["id"],
         "name": row["name"],
         "manufacturer": row["manufacturer"],
@@ -682,6 +849,9 @@ def _serialize_team(row):
         "version": row["version"],
         "updated_at": _format_datetime(row["updated_at"]),
     }
+    if row.get("season") is not None:
+        result["season"] = int(row["season"])
+    return result
 
 
 def _json_dump(data):
@@ -977,9 +1147,9 @@ def list_riders(
                 conditions.append("r.rider_number LIKE %s")
                 params.append(f"%{rider_number}%")
             if name:
-                conditions.append("(r.english_name LIKE %s OR r.chinese_name LIKE %s OR r.nickname LIKE %s)")
+                conditions.append("(r.english_name LIKE %s OR COALESCE(nt.chinese_name, r.chinese_name) LIKE %s)")
                 name_pattern = f"%{name}%"
-                params.extend([name_pattern, name_pattern, name_pattern])
+                params.extend([name_pattern, name_pattern])
             if nationality:
                 conditions.append("r.nationality LIKE %s")
                 params.append(f"%{nationality}%")
@@ -989,10 +1159,14 @@ def list_riders(
             where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
             cur.execute(
                 f"""
-                SELECT r.id, r.rider_number, r.english_name, r.chinese_name, r.nickname, r.nationality,
+                SELECT r.id, r.rider_number, r.english_name,
+                       COALESCE(nt.chinese_name, r.chinese_name) AS chinese_name,
+                       nt.source AS chinese_name_source, nt.is_reviewed AS chinese_name_reviewed,
+                       r.nationality,
                        r.team_id, t.name AS team_name, r.bike, r.birth_date, r.birth_place,
                        r.version, r.updated_at
                 FROM riders r
+                LEFT JOIN rider_name_translations nt ON nt.rider_id = r.id
                 LEFT JOIN teams t ON t.id = r.team_id
                 {where_clause}
                 ORDER BY r.id DESC
@@ -1000,6 +1174,208 @@ def list_riders(
                 params,
             )
             return [_serialize_rider(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def _mark_season_roster_draft(cur, season: int):
+    """名单发生变化后撤销完成确认，防止积分继续基于过期名单录入。"""
+    cur.execute(
+        "UPDATE seasons SET roster_complete = 0, "
+        "version = version + 1 WHERE year = %s",
+        (season,),
+    )
+    if cur.rowcount == 0:
+        raise ValueError("赛季不存在，请先创建赛季")
+
+
+def _validate_season_team_id(cur, season: int, team_id):
+    if team_id is None:
+        return None
+    cur.execute(
+        "SELECT team_id FROM season_teams WHERE season = %s AND team_id = %s",
+        (season, team_id),
+    )
+    if not cur.fetchone():
+        raise ValueError("所选车队不在当前赛季名单中")
+    return team_id
+
+
+def list_season_teams(season: int, name: str = "", manufacturer: str = ""):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            conditions = ["st.season = %s"]
+            params = [season]
+            if name:
+                conditions.append("t.name LIKE %s")
+                params.append(f"%{name}%")
+            if manufacturer:
+                conditions.append("st.manufacturer LIKE %s")
+                params.append(f"%{manufacturer}%")
+            cur.execute(
+                f"""
+                SELECT st.season, t.id, t.name, st.manufacturer, st.version, st.updated_at,
+                       GROUP_CONCAT(CONCAT(sr.rider_number, ' ', r.english_name)
+                           ORDER BY CAST(sr.rider_number AS UNSIGNED), sr.rider_number SEPARATOR '、') AS members
+                FROM season_teams st
+                INNER JOIN teams t ON t.id = st.team_id
+                LEFT JOIN season_riders sr ON sr.season = st.season AND sr.team_id = st.team_id
+                LEFT JOIN riders r ON r.id = sr.rider_id
+                WHERE {' AND '.join(conditions)}
+                GROUP BY st.season, t.id, t.name, st.manufacturer, st.version, st.updated_at
+                ORDER BY t.id ASC
+                """,
+                params,
+            )
+            return [_serialize_team(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def list_season_riders(
+    season: int,
+    rider_number: str = "",
+    name: str = "",
+    nationality: str = "",
+    team_id: int | None = None,
+):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            conditions = ["sr.season = %s"]
+            params = [season]
+            if rider_number:
+                conditions.append("sr.rider_number LIKE %s")
+                params.append(f"%{rider_number}%")
+            if name:
+                conditions.append("(r.english_name LIKE %s OR COALESCE(nt.chinese_name, r.chinese_name) LIKE %s)")
+                params.extend([f"%{name}%"] * 2)
+            if nationality:
+                conditions.append("r.nationality LIKE %s")
+                params.append(f"%{nationality}%")
+            if team_id is not None:
+                conditions.append("sr.team_id = %s")
+                params.append(team_id)
+            cur.execute(
+                f"""
+                SELECT sr.season, r.id, sr.rider_number, r.english_name,
+                       COALESCE(nt.chinese_name, r.chinese_name) AS chinese_name,
+                       nt.source AS chinese_name_source, nt.is_reviewed AS chinese_name_reviewed,
+                       r.nationality, sr.team_id, t.name AS team_name,
+                       sr.bike, r.birth_date, r.birth_place, sr.version, sr.updated_at
+                FROM season_riders sr
+                INNER JOIN riders r ON r.id = sr.rider_id
+                LEFT JOIN rider_name_translations nt ON nt.rider_id = r.id
+                LEFT JOIN teams t ON t.id = sr.team_id
+                WHERE {' AND '.join(conditions)}
+                ORDER BY r.id DESC
+                """,
+                params,
+            )
+            return [_serialize_rider(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def create_season_team(season, name, manufacturer, operator_id=None, operator_username=""):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            _mark_season_roster_draft(cur, season)
+            cur.execute("SELECT id FROM teams WHERE name = %s", (name,))
+            base = cur.fetchone()
+            if base:
+                team_id = base["id"]
+            else:
+                cur.execute("INSERT INTO teams (name, manufacturer) VALUES (%s, %s)", (name, manufacturer))
+                team_id = cur.lastrowid
+            cur.execute(
+                "INSERT INTO season_teams (season, team_id, manufacturer) VALUES (%s, %s, %s)",
+                (season, team_id, manufacturer),
+            )
+            team = list_season_teams_in_cursor(cur, season, team_id)
+            _insert_operation_log(cur, operator_id, operator_username, "create", "team", team_id,
+                                  f"{season} {name}", after_data=team)
+        conn.commit()
+        return team
+    except pymysql.err.IntegrityError as exc:
+        conn.rollback()
+        raise ValueError("该车队已在当前赛季名单中") from exc
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def list_season_teams_in_cursor(cur, season: int, team_id: int):
+    cur.execute(
+        """
+        SELECT st.season, t.id, t.name, st.manufacturer, st.version, st.updated_at,
+               GROUP_CONCAT(CONCAT(sr.rider_number, ' ', r.english_name)
+                   ORDER BY CAST(sr.rider_number AS UNSIGNED), sr.rider_number SEPARATOR '、') AS members
+        FROM season_teams st INNER JOIN teams t ON t.id = st.team_id
+        LEFT JOIN season_riders sr ON sr.season = st.season AND sr.team_id = st.team_id
+        LEFT JOIN riders r ON r.id = sr.rider_id
+        WHERE st.season = %s AND st.team_id = %s
+        GROUP BY st.season, t.id, t.name, st.manufacturer, st.version, st.updated_at
+        """,
+        (season, team_id),
+    )
+    return _serialize_team(cur.fetchone())
+
+
+def update_season_team(season, team_id, name, manufacturer, expected_version,
+                       operator_id=None, operator_username=""):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            before = list_season_teams_in_cursor(cur, season, team_id)
+            if not before:
+                raise ValueError("当前赛季车队不存在")
+            cur.execute("UPDATE teams SET name = %s WHERE id = %s", (name, team_id))
+            cur.execute(
+                "UPDATE season_teams SET manufacturer = %s, version = version + 1 "
+                "WHERE season = %s AND team_id = %s AND version = %s",
+                (manufacturer, season, team_id, expected_version),
+            )
+            if cur.rowcount == 0:
+                raise ConflictError("该赛季车队已被其他管理员修改，请刷新后重试")
+            _mark_season_roster_draft(cur, season)
+            after = list_season_teams_in_cursor(cur, season, team_id)
+            _insert_operation_log(cur, operator_id, operator_username, "update", "team", team_id,
+                                  f"{season} {name}", before_data=before, after_data=after)
+        conn.commit()
+        return after
+    except pymysql.err.IntegrityError as exc:
+        conn.rollback()
+        raise ValueError("车队名称已存在") from exc
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def delete_season_team(season, team_id, operator_id=None, operator_username=""):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            before = list_season_teams_in_cursor(cur, season, team_id)
+            if not before:
+                raise ValueError("当前赛季车队不存在")
+            cur.execute("SELECT COUNT(*) AS cnt FROM season_riders WHERE season=%s AND team_id=%s", (season, team_id))
+            if cur.fetchone()["cnt"]:
+                raise ValueError("该车队在当前赛季仍有车手，请先转移或移除车手")
+            cur.execute("DELETE FROM season_teams WHERE season=%s AND team_id=%s", (season, team_id))
+            _mark_season_roster_draft(cur, season)
+            _insert_operation_log(cur, operator_id, operator_username, "delete", "team", team_id,
+                                  f"{season} {before['name']}", before_data=before)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -1038,7 +1414,8 @@ def _match_official_team(teams: list[dict], team_name: str, manufacturer: str):
     return None
 
 
-def create_official_riders(profiles: list[dict], operator_id=None, operator_username=""):
+def create_official_riders(profiles: list[dict], season: int | None = None,
+                           operator_id=None, operator_username=""):
     """新增官网赛果中出现但本地不存在的车手，并返回新增及已存在统计。"""
     country_names = {
         "ES": "西班牙", "IT": "意大利", "FR": "法国", "GB": "英国",
@@ -1050,13 +1427,53 @@ def create_official_riders(profiles: list[dict], operator_id=None, operator_user
     existing = []
     try:
         with conn.cursor() as cur:
+            if season is not None and profiles:
+                _mark_season_roster_draft(cur, season)
             cur.execute("SELECT id, name, manufacturer FROM teams")
             teams = list(cur.fetchall())
             for profile in profiles:
                 number = str(profile["rider_number"]).strip()
-                cur.execute("SELECT id FROM riders WHERE rider_number = %s", (number,))
-                if cur.fetchone():
+                official_rider_id = str(profile.get("official_rider_id") or "").strip() or None
+                existing_rider = None
+                if official_rider_id:
+                    cur.execute(
+                        "SELECT id, team_id, bike FROM riders WHERE official_rider_id=%s",
+                        (official_rider_id,),
+                    )
+                    existing_rider = cur.fetchone()
+                if not existing_rider:
+                    cur.execute(
+                        """SELECT id, team_id, bike FROM riders
+                           WHERE LOWER(TRIM(english_name))=LOWER(TRIM(%s)) AND birth_date=%s
+                           ORDER BY id LIMIT 1""",
+                        (profile["english_name"], profile.get("birth_date") or "1900-01-01"),
+                    )
+                    existing_rider = cur.fetchone()
+                if existing_rider:
                     existing.append(number)
+                    if official_rider_id:
+                        cur.execute(
+                            "UPDATE riders SET official_rider_id=COALESCE(official_rider_id,%s) WHERE id=%s",
+                            (official_rider_id, existing_rider["id"]),
+                        )
+                    if season is not None:
+                        team_id = _match_official_team(
+                            teams, profile.get("team_name", ""), profile.get("bike", "")
+                        ) or existing_rider.get("team_id")
+                        if team_id is not None:
+                            cur.execute(
+                                "INSERT IGNORE INTO season_teams (season, team_id, manufacturer) "
+                                "SELECT %s, id, manufacturer FROM teams WHERE id=%s",
+                                (season, team_id),
+                            )
+                        cur.execute(
+                            """INSERT INTO season_riders (season,rider_id,rider_number,team_id,bike)
+                               VALUES (%s,%s,%s,%s,%s)
+                               ON DUPLICATE KEY UPDATE rider_number=VALUES(rider_number),
+                                   team_id=VALUES(team_id), bike=VALUES(bike), version=version+1""",
+                            (season, existing_rider["id"], number, team_id,
+                             profile.get("bike") or existing_rider.get("bike") or "未知"),
+                        )
                     continue
                 team_id = _match_official_team(
                     teams, profile.get("team_name", ""), profile.get("bike", "")
@@ -1074,15 +1491,15 @@ def create_official_riders(profiles: list[dict], operator_id=None, operator_user
                 cur.execute(
                     """
                     INSERT INTO riders
-                        (rider_number, english_name, chinese_name, nickname, nationality,
+                        (rider_number, official_rider_id, english_name, chinese_name, nationality,
                          team_id, bike, birth_date, birth_place)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         number,
+                        official_rider_id,
                         profile["english_name"],
                         profile.get("chinese_name") or profile["english_name"],
-                        profile.get("nickname") or None,
                         nationality,
                         team_id,
                         profile.get("bike") or "未知",
@@ -1090,7 +1507,23 @@ def create_official_riders(profiles: list[dict], operator_id=None, operator_user
                         birth_place,
                     ),
                 )
-                rider = _fetch_rider(cur, cur.lastrowid)
+                new_rider_id = cur.lastrowid
+                _set_canonical_chinese_name(
+                    cur, new_rider_id, profile.get("chinese_name") or profile["english_name"],
+                    source="fallback", reviewed=False,
+                )
+                rider = _fetch_rider(cur, new_rider_id)
+                if season is not None:
+                    if team_id is not None:
+                        cur.execute(
+                            "INSERT IGNORE INTO season_teams (season, team_id, manufacturer) "
+                            "SELECT %s, id, manufacturer FROM teams WHERE id=%s",
+                            (season, team_id),
+                        )
+                    cur.execute(
+                        "INSERT INTO season_riders (season,rider_id,rider_number,team_id,bike) VALUES (%s,%s,%s,%s,%s)",
+                        (season, rider["id"], number, team_id, profile.get("bike") or "未知"),
+                    )
                 created.append(rider)
                 _insert_operation_log(
                     cur, operator_id, operator_username, "create", "rider",
@@ -1106,6 +1539,7 @@ def create_official_riders(profiles: list[dict], operator_id=None, operator_user
 
 
 def sync_official_roster(
+    season: int,
     official_teams: list[dict],
     profiles: list[dict],
     operator_id=None,
@@ -1131,6 +1565,7 @@ def sync_official_roster(
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            _mark_season_roster_draft(cur, season)
             for official_team in official_teams:
                 official_id = str(official_team.get("official_team_id") or "").strip() or None
                 name = str(official_team.get("name") or "").strip()
@@ -1224,14 +1659,19 @@ def sync_official_roster(
                     (official_rider_id,),
                 )
                 by_official_id = cur.fetchone()
-                cur.execute("SELECT id FROM riders WHERE rider_number = %s", (number,))
-                by_number = cur.fetchone()
-                if by_official_id and by_number and by_official_id["id"] != by_number["id"]:
-                    raise ValueError(f"官网车手 #{number} 与本地车号记录冲突")
-                existing_id = (by_official_id or by_number or {}).get("id")
+                by_identity = None
+                if not by_official_id:
+                    cur.execute(
+                        """SELECT id FROM riders
+                           WHERE LOWER(TRIM(english_name))=LOWER(TRIM(%s)) AND birth_date=%s
+                           ORDER BY id LIMIT 1""",
+                        (str(profile.get("english_name") or "未知车手").strip(),
+                         str(profile.get("birth_date") or "1900-01-01")[:10]),
+                    )
+                    by_identity = cur.fetchone()
+                existing_id = (by_official_id or by_identity or {}).get("id")
 
                 english_name = str(profile.get("english_name") or "未知车手").strip()
-                nickname = str(profile.get("nickname") or "").strip() or None
                 bike = str(profile.get("bike") or "未知").strip() or "未知"
                 birth_date = str(profile.get("birth_date") or "1900-01-01")[:10]
                 official_chinese_name = str(
@@ -1243,15 +1683,20 @@ def sync_official_roster(
                         """
                         INSERT INTO riders
                             (rider_number, official_rider_id, english_name, chinese_name,
-                             nickname, nationality, team_id, bike, birth_date, birth_place)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                             nationality, team_id, bike, birth_date, birth_place)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (
                             number, official_rider_id, english_name, official_chinese_name,
-                            nickname, nationality, team_id, bike, birth_date, birth_place,
+                            nationality, team_id, bike, birth_date, birth_place,
                         ),
                     )
-                    rider = _fetch_rider(cur, cur.lastrowid)
+                    new_rider_id = cur.lastrowid
+                    _set_canonical_chinese_name(
+                        cur, new_rider_id, official_chinese_name,
+                        source="fallback", reviewed=False,
+                    )
+                    rider = _fetch_rider(cur, new_rider_id)
                     summary["riders"]["created"] += 1
                     _insert_operation_log(
                         cur, operator_id, operator_username, "create", "rider",
@@ -1267,7 +1712,6 @@ def sync_official_roster(
                     "rider_number": number,
                     "english_name": english_name,
                     "chinese_name": chinese_name,
-                    "nickname": nickname or "",
                     "nationality": nationality,
                     "team_id": team_id,
                     "bike": bike,
@@ -1287,12 +1731,12 @@ def sync_official_roster(
                     """
                     UPDATE riders
                     SET rider_number = %s, official_rider_id = %s, english_name = %s,
-                        chinese_name = %s, nickname = %s, nationality = %s, team_id = %s,
+                        chinese_name = %s, nationality = %s, team_id = %s,
                         bike = %s, birth_date = %s, birth_place = %s, version = version + 1
                     WHERE id = %s
                     """,
                     (
-                        number, official_rider_id, english_name, chinese_name, nickname,
+                        number, official_rider_id, english_name, chinese_name,
                         nationality, team_id, bike, birth_date, birth_place, existing_id,
                     ),
                 )
@@ -1301,6 +1745,51 @@ def sync_official_roster(
                 _insert_operation_log(
                     cur, operator_id, operator_username, "update", "rider",
                     rider["id"], rider["english_name"], before_data=before, after_data=rider,
+                )
+
+            # 将基础身份映射为本赛季参赛名单；不同赛季的车队、车辆归属互不覆盖。
+            cur.execute("SELECT id, name, manufacturer, official_team_id FROM teams")
+            all_teams = list(cur.fetchall())
+            team_by_official = {str(row["official_team_id"]): row for row in all_teams if row.get("official_team_id")}
+            team_by_name = {normalize(row["name"]): row for row in all_teams}
+            for official_team in official_teams:
+                team = team_by_official.get(str(official_team.get("official_team_id") or "")) \
+                    or team_by_name.get(normalize(official_team.get("name") or ""))
+                if not team:
+                    continue
+                manufacturer = str(official_team.get("manufacturer") or team["manufacturer"] or "未知").strip()
+                cur.execute(
+                    """INSERT INTO season_teams (season, team_id, manufacturer)
+                       VALUES (%s,%s,%s)
+                       ON DUPLICATE KEY UPDATE manufacturer=VALUES(manufacturer), version=version+1""",
+                    (season, team["id"], manufacturer),
+                )
+
+            cur.execute("SELECT id, rider_number, official_rider_id, english_name, birth_date, team_id, bike FROM riders")
+            all_riders = list(cur.fetchall())
+            rider_by_official = {str(row["official_rider_id"]): row for row in all_riders if row.get("official_rider_id")}
+            rider_by_identity = {
+                (str(row["english_name"]).strip().casefold(), _format_date(row["birth_date"])): row
+                for row in all_riders
+            }
+            for profile in profiles:
+                rider = rider_by_official.get(str(profile.get("official_rider_id") or "")) \
+                    or rider_by_identity.get((
+                        str(profile.get("english_name") or "").strip().casefold(),
+                        str(profile.get("birth_date") or "1900-01-01")[:10],
+                    ))
+                if not rider:
+                    continue
+                team = team_by_official.get(str(profile.get("official_team_id") or "")) \
+                    or team_by_name.get(normalize(profile.get("team_name") or ""))
+                team_id = team["id"] if team else None
+                bike = str(profile.get("bike") or rider["bike"] or "未知").strip()
+                cur.execute(
+                    """INSERT INTO season_riders (season, rider_id, rider_number, team_id, bike)
+                       VALUES (%s,%s,%s,%s,%s)
+                       ON DUPLICATE KEY UPDATE rider_number=VALUES(rider_number),
+                           team_id=VALUES(team_id), bike=VALUES(bike), version=version+1""",
+                    (season, rider["id"], str(profile.get("rider_number") or "").strip(), team_id, bike),
                 )
         conn.commit()
         return summary
@@ -1317,10 +1806,14 @@ def sync_official_roster(
 def _fetch_rider(cur, rider_id: int):
     cur.execute(
         """
-        SELECT r.id, r.rider_number, r.english_name, r.chinese_name, r.nickname, r.nationality,
+        SELECT r.id, r.rider_number, r.english_name,
+               COALESCE(nt.chinese_name, r.chinese_name) AS chinese_name,
+               nt.source AS chinese_name_source, nt.is_reviewed AS chinese_name_reviewed,
+               r.nationality,
                r.team_id, t.name AS team_name, r.bike, r.birth_date, r.birth_place,
                r.version, r.updated_at
         FROM riders r
+        LEFT JOIN rider_name_translations nt ON nt.rider_id = r.id
         LEFT JOIN teams t ON t.id = r.team_id
         WHERE r.id = %s
         """,
@@ -1338,6 +1831,160 @@ def get_rider(rider_id: int):
         conn.close()
 
 
+def _fetch_season_rider(cur, season: int, rider_id: int):
+    cur.execute(
+        """
+        SELECT sr.season, r.id, sr.rider_number, r.english_name,
+               COALESCE(nt.chinese_name, r.chinese_name) AS chinese_name,
+               nt.source AS chinese_name_source, nt.is_reviewed AS chinese_name_reviewed,
+               r.nationality, sr.team_id, t.name AS team_name,
+               sr.bike, r.birth_date, r.birth_place, sr.version, sr.updated_at
+        FROM season_riders sr INNER JOIN riders r ON r.id = sr.rider_id
+        LEFT JOIN rider_name_translations nt ON nt.rider_id = r.id
+        LEFT JOIN teams t ON t.id = sr.team_id
+        WHERE sr.season = %s AND sr.rider_id = %s
+        """,
+        (season, rider_id),
+    )
+    return _serialize_rider(cur.fetchone())
+
+
+def get_season_rider(season: int, rider_id: int):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            return _fetch_season_rider(cur, season, rider_id)
+    finally:
+        conn.close()
+
+
+def create_season_rider(
+    season, rider_number, english_name, chinese_name, nationality,
+    team_id, bike, birth_date, birth_place, operator_id=None, operator_username="",
+):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            _mark_season_roster_draft(cur, season)
+            team_id = _validate_season_team_id(cur, season, team_id)
+            cur.execute(
+                """SELECT r.id, COALESCE(nt.is_reviewed, 0) AS name_reviewed
+                   FROM riders r LEFT JOIN rider_name_translations nt ON nt.rider_id=r.id
+                   WHERE LOWER(TRIM(r.english_name))=LOWER(TRIM(%s)) AND r.birth_date=%s
+                   ORDER BY r.id LIMIT 1""",
+                (english_name, birth_date),
+            )
+            base = cur.fetchone()
+            if base:
+                rider_id = base["id"]
+                cur.execute(
+                    """UPDATE riders SET english_name=%s,
+                       nationality=%s, birth_date=%s, birth_place=%s, version=version+1
+                       WHERE id=%s""",
+                    (english_name, nationality,
+                     birth_date, birth_place, rider_id),
+                )
+            else:
+                cur.execute(
+                    """INSERT INTO riders (rider_number, english_name, chinese_name,
+                       nationality, team_id, bike, birth_date, birth_place)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    (rider_number, english_name, chinese_name,
+                     nationality, team_id, bike, birth_date, birth_place),
+                )
+                rider_id = cur.lastrowid
+            if not base or not base["name_reviewed"]:
+                _set_canonical_chinese_name(
+                    cur, rider_id, chinese_name, source="manual", reviewed=True,
+                    updated_by=operator_id,
+                )
+            cur.execute(
+                "INSERT INTO season_riders (season, rider_id, rider_number, team_id, bike) VALUES (%s,%s,%s,%s,%s)",
+                (season, rider_id, rider_number, team_id, bike),
+            )
+            rider = _fetch_season_rider(cur, season, rider_id)
+            _insert_operation_log(cur, operator_id, operator_username, "create", "rider", rider_id,
+                                  f"{season} {english_name}", after_data=rider)
+        conn.commit()
+        return rider
+    except pymysql.err.IntegrityError as exc:
+        conn.rollback()
+        raise ValueError("该车手已在当前赛季名单中，或车手编号发生冲突") from exc
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def update_season_rider(
+    season, rider_id, rider_number, english_name, chinese_name, nationality,
+    team_id, bike, birth_date, birth_place, expected_version,
+    operator_id=None, operator_username="",
+):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            before = _fetch_season_rider(cur, season, rider_id)
+            if not before:
+                raise ValueError("当前赛季车手不存在")
+            team_id = _validate_season_team_id(cur, season, team_id)
+            cur.execute(
+                """UPDATE season_riders SET rider_number=%s, team_id=%s, bike=%s, version=version+1
+                   WHERE season=%s AND rider_id=%s AND version=%s""",
+                (rider_number, team_id, bike, season, rider_id, expected_version),
+            )
+            if cur.rowcount == 0:
+                raise ConflictError("该赛季车手已被其他管理员修改，请刷新后重试")
+            cur.execute(
+                """UPDATE riders SET rider_number=%s, english_name=%s, chinese_name=%s,
+                   nationality=%s, birth_date=%s, birth_place=%s,
+                   version=version+1 WHERE id=%s""",
+                (rider_number, english_name, chinese_name,
+                 nationality, birth_date, birth_place, rider_id),
+            )
+            _set_canonical_chinese_name(
+                cur, rider_id, chinese_name, source="manual", reviewed=True,
+                updated_by=operator_id,
+            )
+            _mark_season_roster_draft(cur, season)
+            after = _fetch_season_rider(cur, season, rider_id)
+            _insert_operation_log(cur, operator_id, operator_username, "update", "rider", rider_id,
+                                  f"{season} {english_name}", before_data=before, after_data=after)
+        conn.commit()
+        return after
+    except pymysql.err.IntegrityError as exc:
+        conn.rollback()
+        raise ValueError("车手编号已存在") from exc
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def delete_season_rider(season, rider_id, operator_id=None, operator_username=""):
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            before = _fetch_season_rider(cur, season, rider_id)
+            if not before:
+                raise ValueError("当前赛季车手不存在")
+            cur.execute("SELECT COUNT(*) AS cnt FROM rider_standings WHERE season=%s AND rider_id=%s", (season, rider_id))
+            if cur.fetchone()["cnt"]:
+                raise ValueError("该车手已有当前赛季积分记录，请先删除积分记录")
+            cur.execute("DELETE FROM season_riders WHERE season=%s AND rider_id=%s", (season, rider_id))
+            _mark_season_roster_draft(cur, season)
+            _insert_operation_log(cur, operator_id, operator_username, "delete", "rider", rider_id,
+                                  f"{season} {before['english_name']}", before_data=before)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _validate_team_id(cur, team_id):
     if team_id is None:
         return None
@@ -1351,7 +1998,6 @@ def create_rider(
     rider_number: str,
     english_name: str,
     chinese_name: str,
-    nickname: str,
     nationality: str,
     team_id: int | None,
     bike: str,
@@ -1367,14 +2013,13 @@ def create_rider(
             cur.execute(
                 """
                 INSERT INTO riders
-                    (rider_number, english_name, chinese_name, nickname, nationality, team_id, bike, birth_date, birth_place)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (rider_number, english_name, chinese_name, nationality, team_id, bike, birth_date, birth_place)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     rider_number,
                     english_name,
                     chinese_name,
-                    nickname or None,
                     nationality,
                     team_id,
                     bike,
@@ -1383,6 +2028,10 @@ def create_rider(
                 ),
             )
             new_id = cur.lastrowid
+            _set_canonical_chinese_name(
+                cur, new_id, chinese_name, source="manual", reviewed=True,
+                updated_by=operator_id,
+            )
             rider = _fetch_rider(cur, new_id)
             _insert_operation_log(
                 cur, operator_id, operator_username, "create", "rider",
@@ -1402,7 +2051,6 @@ def update_rider(
     rider_number: str,
     english_name: str,
     chinese_name: str,
-    nickname: str,
     nationality: str,
     team_id: int | None,
     bike: str,
@@ -1422,7 +2070,7 @@ def update_rider(
             cur.execute(
                 """
                 UPDATE riders
-                SET rider_number = %s, english_name = %s, chinese_name = %s, nickname = %s, nationality = %s,
+                SET rider_number = %s, english_name = %s, chinese_name = %s, nationality = %s,
                     team_id = %s, bike = %s, birth_date = %s, birth_place = %s, version = version + 1
                 WHERE id = %s AND version = %s
                 """,
@@ -1430,7 +2078,6 @@ def update_rider(
                     rider_number,
                     english_name,
                     chinese_name,
-                    nickname or None,
                     nationality,
                     team_id,
                     bike,
@@ -1442,6 +2089,10 @@ def update_rider(
             )
             if cur.rowcount == 0:
                 raise ConflictError("该车手已被其他管理员修改，请刷新后重试")
+            _set_canonical_chinese_name(
+                cur, rider_id, chinese_name, source="manual", reviewed=True,
+                updated_by=operator_id,
+            )
             rider = _fetch_rider(cur, rider_id)
             _insert_operation_log(
                 cur, operator_id, operator_username, "update", "rider",
@@ -1489,6 +2140,134 @@ def _serialize_race_event(row):
         "version": row["version"],
         "updated_at": _format_datetime(row["updated_at"]),
     }
+
+
+def list_seasons():
+    """返回已创建赛季及其名单确认状态和名单规模。"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT s.year, s.roster_complete, s.version, s.created_at,
+                       COUNT(DISTINCT st.team_id) AS team_count,
+                       COUNT(DISTINCT sr.rider_id) AS rider_count
+                FROM seasons s
+                LEFT JOIN season_teams st ON st.season = s.year
+                LEFT JOIN season_riders sr ON sr.season = s.year
+                GROUP BY s.year, s.roster_complete, s.version, s.created_at
+                ORDER BY s.year DESC
+                """
+            )
+            return [
+                {
+                    "year": int(row["year"]),
+                    "roster_complete": bool(row["roster_complete"]),
+                    "version": int(row["version"]),
+                    "team_count": int(row["team_count"]),
+                    "rider_count": int(row["rider_count"]),
+                    "created_at": _format_datetime(row["created_at"]),
+                }
+                for row in cur.fetchall()
+            ]
+    finally:
+        conn.close()
+
+
+def create_season(year: int, operator_id=None, operator_username=""):
+    """创建一个可在各赛季页面切换的空赛季。"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT year, roster_complete, version, created_at FROM seasons WHERE year = %s", (year,))
+            if cur.fetchone():
+                raise ValueError(f"{year} 赛季已存在")
+            cur.execute("INSERT INTO seasons (year) VALUES (%s)", (year,))
+            cur.execute("SELECT year, roster_complete, version, created_at FROM seasons WHERE year = %s", (year,))
+            row = cur.fetchone()
+            season = {
+                "year": int(row["year"]),
+                "roster_complete": bool(row["roster_complete"]),
+                "version": int(row["version"]),
+                "team_count": 0,
+                "rider_count": 0,
+                "created_at": _format_datetime(row["created_at"]),
+            }
+            _insert_operation_log(
+                cur,
+                operator_id,
+                operator_username,
+                "create",
+                "season",
+                year,
+                f"{year} 赛季",
+                after_data={"season": year},
+            )
+        conn.commit()
+        return season
+    except pymysql.err.IntegrityError as exc:
+        conn.rollback()
+        raise ValueError(f"{year} 赛季已存在") from exc
+    finally:
+        conn.close()
+
+
+def get_season(year: int):
+    return next((item for item in list_seasons() if item["year"] == year), None)
+
+
+def set_season_roster_complete(
+    year: int,
+    complete: bool,
+    expected_version: int,
+    operator_id=None,
+    operator_username="",
+):
+    """确认或重新打开赛季名单；确认时要求车队、车手均已录入且车手均已分配车队。"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT year, roster_complete, version FROM seasons WHERE year = %s",
+                (year,),
+            )
+            before = cur.fetchone()
+            if not before:
+                raise ValueError("赛季不存在")
+            if complete:
+                cur.execute("SELECT COUNT(*) AS cnt FROM season_teams WHERE season = %s", (year,))
+                team_count = cur.fetchone()["cnt"]
+                cur.execute(
+                    "SELECT COUNT(*) AS cnt, SUM(team_id IS NULL) AS unassigned "
+                    "FROM season_riders WHERE season = %s",
+                    (year,),
+                )
+                roster = cur.fetchone()
+                if not team_count or not roster["cnt"]:
+                    raise ValueError("请先录入当赛季的车队和车手信息")
+                if int(roster["unassigned"] or 0) > 0:
+                    raise ValueError("仍有车手未分配当赛季车队，暂不能确认名单")
+            cur.execute(
+                "UPDATE seasons SET roster_complete = %s, version = version + 1 "
+                "WHERE year = %s AND version = %s",
+                (1 if complete else 0, year, expected_version),
+            )
+            if cur.rowcount == 0:
+                raise ConflictError("赛季名单状态已被其他管理员修改，请刷新后重试")
+            after = {"season": year, "roster_complete": bool(complete)}
+            _insert_operation_log(
+                cur, operator_id, operator_username, "update", "season", year,
+                f"{year} 赛季名单",
+                before_data={"season": year, "roster_complete": bool(before["roster_complete"])},
+                after_data=after,
+            )
+        conn.commit()
+        return get_season(year)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _fetch_race_event(cur, event_id: int):
@@ -1830,19 +2609,49 @@ def sync_season_race_schedules(
                 row["round_number"]: _serialize_race_event(row)
                 for row in cur.fetchall()
             }
-            if not local_events:
-                raise ValueError(f"本地数据库中没有 {season} 赛季")
-
+            cur.execute("INSERT IGNORE INTO seasons (year) VALUES (%s)", (season,))
             official_rounds = {int(event["round_number"]) for event in official_events}
+            for official_event in sorted(
+                official_events, key=lambda event: int(event["round_number"])
+            ):
+                round_number = int(official_event["round_number"])
+                if round_number in local_events:
+                    continue
+                cur.execute(
+                    """
+                    INSERT INTO race_events
+                        (season, round_number, flag, country, country_en,
+                         start_date, end_date, circuit)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        season,
+                        round_number,
+                        official_event.get("flag") or "🏁",
+                        official_event.get("country") or "未知",
+                        official_event.get("country_en") or "UNKNOWN",
+                        official_event["start_date"],
+                        official_event["end_date"],
+                        official_event.get("circuit") or "未知赛道",
+                    ),
+                )
+                event_id = cur.lastrowid
+                event = _fetch_race_event(cur, event_id)
+                local_events[round_number] = event
+                _insert_operation_log(
+                    cur,
+                    operator_id,
+                    operator_username,
+                    "create",
+                    "race",
+                    event_id,
+                    f"{season} 第{round_number}站 {event['country']}",
+                    after_data=event,
+                )
+
             missing_rounds = sorted(set(local_events) - official_rounds)
-            unknown_rounds = sorted(official_rounds - set(local_events))
-            if missing_rounds or unknown_rounds:
-                messages = []
-                if missing_rounds:
-                    messages.append(f"官网缺少本地分站 {missing_rounds}")
-                if unknown_rounds:
-                    messages.append(f"官网包含未知分站 {unknown_rounds}")
-                raise ValueError("；".join(messages))
+            if missing_rounds:
+                raise ValueError(f"官网缺少本地分站 {missing_rounds}")
 
             for official_event in sorted(
                 official_events, key=lambda event: int(event["round_number"])
@@ -1957,11 +2766,16 @@ def _fetch_race_result_entries(cur, result_set_id: int):
     cur.execute(
         """
         SELECT rr.rider_id, rr.position, rr.points, rr.finish_time,
-               rr.result_status, rr.remaining_laps, r.rider_number,
-               r.english_name, r.chinese_name, t.name AS team_name
+               rr.result_status, rr.remaining_laps, sr.rider_number,
+               r.english_name, COALESCE(nt.chinese_name, r.chinese_name) AS chinese_name,
+               t.name AS team_name
         FROM race_results rr
+        JOIN race_result_sets rset ON rset.id=rr.result_set_id
+        JOIN race_events e ON e.id=rset.race_event_id
         JOIN riders r ON r.id = rr.rider_id
-        LEFT JOIN teams t ON t.id = r.team_id
+        JOIN season_riders sr ON sr.season=e.season AND sr.rider_id=r.id
+        LEFT JOIN rider_name_translations nt ON nt.rider_id = r.id
+        LEFT JOIN teams t ON t.id = sr.team_id
         WHERE rr.result_set_id = %s
         ORDER BY rr.position IS NULL ASC, rr.position ASC,
                  rr.remaining_laps ASC, rr.id ASC
@@ -2245,8 +3059,8 @@ def sync_race_results(
                 skipped = []
                 for row in official_rows:
                     cur.execute(
-                        "SELECT id FROM riders WHERE rider_number = %s",
-                        (row["rider_number"],),
+                        "SELECT rider_id AS id FROM season_riders WHERE season=%s AND rider_number=%s",
+                        (event["season"], row["rider_number"]),
                     )
                     rider = cur.fetchone()
                     if not rider:
@@ -2364,11 +3178,16 @@ def _standing_select_sql():
     return """
         SELECT s.id, s.season, s.position, s.points, s.race_wins, s.podiums,
                s.rider_id, s.version, s.updated_at,
-               r.rider_number, r.english_name, r.chinese_name, r.nationality,
-               t.name AS team_name, t.manufacturer
+               sr.rider_number, r.english_name,
+               COALESCE(nt.chinese_name, r.chinese_name) AS chinese_name,
+               r.nationality,
+               t.name AS team_name, st.manufacturer
         FROM rider_standings s
         INNER JOIN riders r ON r.id = s.rider_id
-        LEFT JOIN teams t ON t.id = r.team_id
+        LEFT JOIN rider_name_translations nt ON nt.rider_id = r.id
+        INNER JOIN season_riders sr ON sr.season = s.season AND sr.rider_id = s.rider_id
+        LEFT JOIN teams t ON t.id = sr.team_id
+        LEFT JOIN season_teams st ON st.season = sr.season AND st.team_id = sr.team_id
     """
 
 
@@ -2393,10 +3212,19 @@ def list_rider_standings(season: int | None = None):
         conn.close()
 
 
-def _validate_standing_rider(cur, rider_id: int):
-    cur.execute("SELECT id FROM riders WHERE id = %s", (rider_id,))
+def _validate_standing_rider(cur, season: int, rider_id: int):
+    cur.execute("SELECT roster_complete FROM seasons WHERE year = %s", (season,))
+    season_row = cur.fetchone()
+    if not season_row:
+        raise ValueError("赛季不存在")
+    if not season_row["roster_complete"]:
+        raise ValueError("请先完成并确认当赛季的车手与车队名单，再录入积分")
+    cur.execute(
+        "SELECT rider_id FROM season_riders WHERE season = %s AND rider_id = %s",
+        (season, rider_id),
+    )
     if not cur.fetchone():
-        raise ValueError("所选车手不存在")
+        raise ValueError("所选车手不在当前赛季名单中")
 
 
 def create_rider_standing(
@@ -2412,7 +3240,7 @@ def create_rider_standing(
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            _validate_standing_rider(cur, rider_id)
+            _validate_standing_rider(cur, season, rider_id)
             cur.execute(
                 """
                 INSERT INTO rider_standings
@@ -2453,7 +3281,7 @@ def update_rider_standing(
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            _validate_standing_rider(cur, rider_id)
+            _validate_standing_rider(cur, season, rider_id)
             before_standing = _fetch_rider_standing(cur, standing_id)
             if not before_standing:
                 raise ValueError("积分记录不存在")
@@ -2603,13 +3431,18 @@ def sync_rider_standings(
     }
     try:
         with conn.cursor() as cur:
+            cur.execute("SELECT roster_complete FROM seasons WHERE year = %s", (season,))
+            season_row = cur.fetchone()
+            if not season_row or not season_row["roster_complete"]:
+                raise ValueError("请先完成并确认当赛季的车手与车队名单，再同步积分")
             for row in official_rows:
                 cur.execute(
                     """
-                    SELECT id, english_name FROM riders
-                    WHERE rider_number = %s
+                    SELECT r.id, r.english_name FROM riders r
+                    INNER JOIN season_riders sr ON sr.rider_id=r.id AND sr.season=%s
+                    WHERE sr.rider_number = %s
                     """,
-                    (row["rider_number"],),
+                    (season, row["rider_number"]),
                 )
                 rider = cur.fetchone()
                 if not rider:
@@ -2702,14 +3535,15 @@ def sync_rider_standings(
             next_position = cur.fetchone()["max_position"] + 1
             cur.execute(
                 """
-                SELECT r.id, r.rider_number, r.english_name
+                SELECT r.id, sr.rider_number, r.english_name
                 FROM riders r
+                INNER JOIN season_riders sr ON sr.rider_id = r.id AND sr.season = %s
                 LEFT JOIN rider_standings s
                     ON s.rider_id = r.id AND s.season = %s
                 WHERE s.id IS NULL
-                ORDER BY CAST(r.rider_number AS UNSIGNED), r.rider_number
+                ORDER BY CAST(sr.rider_number AS UNSIGNED), sr.rider_number
                 """,
-                (season,),
+                (season, season),
             )
             for rider in cur.fetchall():
                 cur.execute(

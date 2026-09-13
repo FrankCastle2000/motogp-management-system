@@ -195,6 +195,20 @@ function writeStorage(storage, key, value) {
   }
 }
 
+const SELECTED_SEASON_KEY = "motogp:selected-season";
+
+function readSelectedSeason(fallback = new Date().getFullYear()) {
+  const value = Number(readStorage(sessionStorage, SELECTED_SEASON_KEY, fallback));
+  return Number.isInteger(value) && value >= 1949 && value <= 2100 ? value : fallback;
+}
+
+function rememberSelectedSeason(year) {
+  const value = Number(year);
+  if (Number.isInteger(value) && value >= 1949 && value <= 2100) {
+    writeStorage(sessionStorage, SELECTED_SEASON_KEY, value);
+  }
+}
+
 function initBackgroundMusic() {
   if (document.getElementById("music-player")) return;
 

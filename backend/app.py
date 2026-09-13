@@ -292,7 +292,6 @@ def _parse_rider_body(body):
     rider_number = (body.get("rider_number") or "").strip()
     english_name = (body.get("english_name") or "").strip()
     chinese_name = (body.get("chinese_name") or "").strip()
-    nickname = (body.get("nickname") or "").strip()
     nationality = (body.get("nationality") or "").strip()
     bike = (body.get("bike") or "").strip()
     birth_date = (body.get("birth_date") or "").strip()
@@ -314,7 +313,6 @@ def _parse_rider_body(body):
         "车手编号": (rider_number, 16),
         "英文名": (english_name, 128),
         "中文名": (chinese_name, 64),
-        "昵称": (nickname, 64),
         "国籍": (nationality, 64),
         "驾驶车辆": (bike, 128),
         "出生地点": (birth_place, 128),
@@ -327,7 +325,7 @@ def _parse_rider_body(body):
     except ValueError as exc:
         raise ValueError("出生日期格式无效") from exc
 
-    return rider_number, english_name, chinese_name, nickname, nationality, team_id, bike, birth_date, birth_place
+    return rider_number, english_name, chinese_name, nationality, team_id, bike, birth_date, birth_place
 
 
 def _parse_version(body, allow_zero=False):
@@ -339,6 +337,20 @@ def _parse_version(body, allow_zero=False):
     if version < (0 if allow_zero else 1):
         raise ValueError("数据版本无效，请刷新后重试")
     return version
+
+
+def _parse_season_value(value, *, write=False):
+    """校验赛季年份；写操作不允许提前创建或写入未来赛季。"""
+    try:
+        season = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("赛季年份无效") from exc
+    max_year = date.today().year if write else 2100
+    if not 1949 <= season <= max_year:
+        if write:
+            raise ValueError(f"赛季年份必须在 1949-{max_year} 之间，不能提前创建未来赛季")
+        raise ValueError("赛季年份无效")
+    return season
 
 
 @app.get("/api/riders")
@@ -362,7 +374,8 @@ def api_list_riders():
             return jsonify({"ok": False, "message": "车队筛选条件无效"}), 400
         if team_id <= 0:
             return jsonify({"ok": False, "message": "车队筛选条件无效"}), 400
-    riders = db.list_riders(rider_number, name, nationality, team_id)
+    season = _parse_season_value(request.args.get("season", date.today().year))
+    riders = db.list_season_riders(season, rider_number, name, nationality, team_id)
     return jsonify({"ok": True, "data": riders})
 
 
@@ -374,7 +387,8 @@ def api_get_rider(rider_id: int):
     输入：路径参数 rider_id，以及已登录用户的 Session Cookie。
     输出：成功时返回 200 和完整车手对象；未登录返回 401，车手不存在返回 404。
     """
-    rider = db.get_rider(rider_id)
+    season = _parse_season_value(request.args.get("season", date.today().year))
+    rider = db.get_season_rider(season, rider_id)
     if not rider:
         return jsonify({"ok": False, "message": "车手不存在"}), 404
     return jsonify({"ok": True, "data": rider})
@@ -385,13 +399,14 @@ def api_get_rider(rider_id: int):
 def api_create_rider():
     """新增车手接口，仅管理员可用。
 
-    输入：JSON {rider_number, english_name, chinese_name, nickname?, nationality, team_id?, bike, birth_date, birth_place}。
+    输入：JSON {rider_number, english_name, chinese_name, nationality, team_id?, bike, birth_date, birth_place}。
     输出：成功时返回 201 和新车手对象；字段或车队无效时返回 400，鉴权失败返回 401/403。
     """
     body = request.get_json(silent=True) or {}
+    season = _parse_season_value(body.get("season", date.today().year), write=True)
     fields = _parse_rider_body(body)
-    rider = db.create_rider(
-        *fields,
+    rider = db.create_season_rider(
+        season, *fields,
         operator_id=session.get("user_id"),
         operator_username=session.get("username", ""),
     )
@@ -407,10 +422,11 @@ def api_update_rider(rider_id: int):
     输出：成功时返回 200 和更新后的车手对象；字段无效返回 400，数据已被他人修改返回 409，鉴权失败返回 401/403。
     """
     body = request.get_json(silent=True) or {}
+    season = _parse_season_value(body.get("season", date.today().year), write=True)
     fields = _parse_rider_body(body)
     version = _parse_version(body)
-    rider = db.update_rider(
-        rider_id,
+    rider = db.update_season_rider(
+        season, rider_id,
         *fields,
         version,
         operator_id=session.get("user_id"),
@@ -427,8 +443,9 @@ def api_delete_rider(rider_id: int):
     输入：路径参数 rider_id，以及管理员 Session Cookie。
     输出：成功时返回 200 和删除成功消息；车手不存在时返回 400，鉴权失败返回 401/403。
     """
-    db.delete_rider(
-        rider_id,
+    season = _parse_season_value(request.args.get("season", date.today().year), write=True)
+    db.delete_season_rider(
+        season, rider_id,
         operator_id=session.get("user_id"),
         operator_username=session.get("username", ""),
     )
@@ -455,7 +472,8 @@ def api_list_teams():
     """
     name = (request.args.get("name") or "").strip()
     manufacturer = (request.args.get("manufacturer") or "").strip()
-    teams = db.list_teams(name, manufacturer)
+    season = _parse_season_value(request.args.get("season", date.today().year))
+    teams = db.list_season_teams(season, name, manufacturer)
     return jsonify({"ok": True, "data": teams})
 
 
@@ -467,7 +485,9 @@ def api_get_team(team_id: int):
     输入：路径参数 team_id，以及已登录用户的 Session Cookie。
     输出：成功时返回 200 和车队对象；未登录返回 401，车队不存在返回 404。
     """
-    team = db.get_team(team_id)
+    season = _parse_season_value(request.args.get("season", date.today().year))
+    teams = db.list_season_teams(season)
+    team = next((item for item in teams if item["id"] == team_id), None)
     if not team:
         return jsonify({"ok": False, "message": "车队不存在"}), 404
     return jsonify({"ok": True, "data": team})
@@ -482,9 +502,10 @@ def api_create_team():
     输出：成功时返回 201 和新车队对象；字段无效或车队名称重复时返回 400，鉴权失败返回 401/403。
     """
     body = request.get_json(silent=True) or {}
+    season = _parse_season_value(body.get("season", date.today().year), write=True)
     name, manufacturer = _parse_team_body(body)
-    team = db.create_team(
-        name,
+    team = db.create_season_team(
+        season, name,
         manufacturer,
         operator_id=session.get("user_id"),
         operator_username=session.get("username", ""),
@@ -501,10 +522,11 @@ def api_update_team(team_id: int):
     输出：成功时返回 200 和更新后的车队对象；字段无效返回 400，数据已被他人修改返回 409，鉴权失败返回 401/403。
     """
     body = request.get_json(silent=True) or {}
+    season = _parse_season_value(body.get("season", date.today().year), write=True)
     name, manufacturer = _parse_team_body(body)
     version = _parse_version(body)
-    team = db.update_team(
-        team_id,
+    team = db.update_season_team(
+        season, team_id,
         name,
         manufacturer,
         version,
@@ -522,8 +544,9 @@ def api_delete_team(team_id: int):
     输入：路径参数 team_id，以及管理员 Session Cookie。
     输出：成功时返回 200 和删除成功消息；车队不存在或仍有关联车手时返回 400，鉴权失败返回 401/403。
     """
-    db.delete_team(
-        team_id,
+    season = _parse_season_value(request.args.get("season", date.today().year), write=True)
+    db.delete_season_team(
+        season, team_id,
         operator_id=session.get("user_id"),
         operator_username=session.get("username", ""),
     )
@@ -535,12 +558,7 @@ def api_delete_team(team_id: int):
 def api_sync_official_roster():
     """从 MotoGP 官方接口同步指定赛季的车队和车手资料。"""
     body = request.get_json(silent=True) or {}
-    try:
-        season = int(body.get("season", date.today().year))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "message": "赛季年份无效"}), 400
-    if not 1949 <= season <= 2100:
-        return jsonify({"ok": False, "message": "赛季年份无效"}), 400
+    season = _parse_season_value(body.get("season", date.today().year), write=True)
 
     sync_key = f"motogp-roster:{season}"
     db.reserve_external_sync(
@@ -551,7 +569,7 @@ def api_sync_official_roster():
     try:
         official = motogp_sync.fetch_season_roster(season)
         summary = db.sync_official_roster(
-            official["teams"],
+            season, official["teams"],
             official["riders"],
             operator_id=session.get("user_id"),
             operator_username=session.get("username", ""),
@@ -584,8 +602,7 @@ def _parse_race_event_body(body):
         round_number = int(body.get("round_number"))
     except (TypeError, ValueError) as exc:
         raise ValueError("赛季年份和分站序号必须是整数") from exc
-    if not 1949 <= season <= 2100:
-        raise ValueError("赛季年份必须在 1949-2100 之间")
+    _parse_season_value(season, write=True)
     if not 1 <= round_number <= 99:
         raise ValueError("分站序号必须在 1-99 之间")
 
@@ -613,6 +630,60 @@ def _parse_race_event_body(body):
     if start > end:
         raise ValueError("开始日期不能晚于结束日期")
     return season, round_number, flag, country, country_en, start_date, end_date, circuit
+
+
+@app.get("/api/seasons")
+@login_required
+def api_list_seasons():
+    """查询系统中已经创建或已有业务数据的赛季。
+
+    输入：已登录用户 Session Cookie。
+    输出：按年份倒序排列的赛季数组，每项包含 year 和 created_at。
+    """
+    current_year = date.today().year
+    seasons = [item for item in db.list_seasons() if item["year"] <= current_year]
+    return jsonify({"ok": True, "data": seasons})
+
+
+@app.post("/api/seasons")
+@admin_required
+def api_create_season():
+    """创建空赛季，供积分榜和赛程日历切换及后续录入数据。
+
+    输入：JSON {year}，年份范围为 1949 到当前年份。
+    输出：新赛季信息；年份无效或重复时返回 400。
+    """
+    body = request.get_json(silent=True) or {}
+    year = _parse_season_value(body.get("year"), write=True)
+    result = db.create_season(
+        year,
+        operator_id=session.get("user_id"),
+        operator_username=session.get("username", ""),
+    )
+    return jsonify({"ok": True, "data": result, "message": f"{year} 赛季创建成功"}), 201
+
+
+@app.put("/api/seasons/<int:year>/roster-status")
+@admin_required
+def api_update_season_roster_status(year: int):
+    """确认当赛季车手与车队名单已经录入完成，或重新打开名单编辑。"""
+    _parse_season_value(year, write=True)
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body.get("complete"), bool):
+        raise ValueError("名单状态无效")
+    version = _parse_version(body)
+    result = db.set_season_roster_complete(
+        year,
+        body["complete"],
+        version,
+        operator_id=session.get("user_id"),
+        operator_username=session.get("username", ""),
+    )
+    return jsonify({
+        "ok": True,
+        "data": result,
+        "message": "赛季名单已确认，现可录入积分" if body["complete"] else "赛季名单已重新开放编辑",
+    })
 
 
 @app.get("/api/races")
@@ -773,12 +844,7 @@ def api_replace_race_schedule(event_id: int):
 def api_sync_race_schedules():
     """从 MotoGP 官方接口同步指定赛季全部分站日程并转换为北京时间。"""
     body = request.get_json(silent=True) or {}
-    try:
-        season = int(body.get("season", date.today().year))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "message": "赛季年份无效"}), 400
-    if not 1949 <= season <= 2100:
-        return jsonify({"ok": False, "message": "赛季年份无效"}), 400
+    season = _parse_season_value(body.get("season", date.today().year), write=True)
 
     sync_key = f"motogp-race-schedules:{season}"
     db.reserve_external_sync(
@@ -933,7 +999,7 @@ def api_sync_race_results(event_id: int):
             event["end_date"],
             race_types=(race_type,),
         )
-        local_numbers = {rider["rider_number"] for rider in db.list_riders()}
+        local_numbers = {rider["rider_number"] for rider in db.list_season_riders(event["season"])}
         appearances = {}
         for selected_type in (race_type,):
             for row in official[selected_type]:
@@ -945,6 +1011,7 @@ def api_sync_race_results(event_id: int):
         ]
         rider_summary = db.create_official_riders(
             profiles,
+            season=event["season"],
             operator_id=session.get("user_id"),
             operator_username=session.get("username", ""),
         )
@@ -987,13 +1054,8 @@ def api_sync_race_results(event_id: int):
 def api_sync_finished_race_results():
     """批量同步指定赛季中所有已完赛分站的冲刺赛和正赛排名。"""
     body = request.get_json(silent=True) or {}
-    try:
-        season = int(body.get("season", date.today().year))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "message": "赛季年份无效"}), 400
-    if not 1949 <= season <= 2100:
-        return jsonify({"ok": False, "message": "赛季年份无效"}), 400
-    if not db.list_riders():
+    season = _parse_season_value(body.get("season", date.today().year), write=True)
+    if not db.list_season_riders(season):
         return jsonify({
             "ok": False,
             "message": "尚未导入车手资料，请先同步官网车队与车手",
@@ -1018,7 +1080,7 @@ def api_sync_finished_race_results():
             for event in local_events
         }
 
-        local_numbers = {rider["rider_number"] for rider in db.list_riders()}
+        local_numbers = {rider["rider_number"] for rider in db.list_season_riders(season)}
         appearances = {}
         for official_event in official["events"]:
             for race_type in ("sprint", "race"):
@@ -1040,6 +1102,7 @@ def api_sync_finished_race_results():
                 })
         rider_summary = db.create_official_riders(
             profiles,
+            season=season,
             operator_id=session.get("user_id"),
             operator_username=session.get("username", ""),
         )
@@ -1147,8 +1210,7 @@ def _parse_rider_standing_body(body):
         podiums = int(body.get("podiums"))
     except (TypeError, ValueError) as exc:
         raise ValueError("赛季、车手、排名和积分数据必须是整数") from exc
-    if not 1949 <= season <= 2100:
-        raise ValueError("赛季年份必须在 1949-2100 之间")
+    _parse_season_value(season, write=True)
     if rider_id <= 0:
         raise ValueError("所选车手无效")
     if not 1 <= position <= 99:
@@ -1187,17 +1249,12 @@ def api_sync_rider_standings():
     输出：成功返回匹配、新增、更新、未变化及跳过的车手统计；过于频繁返回 429，官方接口失败返回 502。
     """
     body = request.get_json(silent=True) or {}
-    try:
-        season = int(body.get("season", 2026))
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "message": "赛季年份无效"}), 400
-    if not 1949 <= season <= 2100:
-        return jsonify({"ok": False, "message": "赛季年份无效"}), 400
-
-    if not db.list_riders():
+    season = _parse_season_value(body.get("season", date.today().year), write=True)
+    season_info = db.get_season(season)
+    if not season_info or not season_info["roster_complete"]:
         return jsonify({
             "ok": False,
-            "message": "尚未导入车手资料，请先到“车手信息”或“车队信息”页面同步官网车队与车手",
+            "message": "请先到车手或车队页面录入并确认该赛季名单，再同步积分",
             "code": "ROSTER_REQUIRED",
         }), 400
 

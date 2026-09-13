@@ -33,6 +33,25 @@
       </div>
     </header>
 
+    <dialog class="modal modal-sm" id="season-modal">
+      <div class="modal-header">
+        <h2>新增赛季</h2>
+        <button type="button" class="modal-close" id="season-modal-close" aria-label="关闭">×</button>
+      </div>
+      <form id="season-form">
+        <div class="field">
+          <label for="new-season-year">赛季年份</label>
+          <input id="new-season-year" type="number" min="1949" required />
+        </div>
+        <p class="form-hint">创建后可切换到该赛季，再录入积分或赛程。</p>
+        <div class="actions">
+          <button type="submit" class="btn-primary" style="width:auto">创建赛季</button>
+          <button type="button" class="btn-ghost" id="season-cancel-btn">取消</button>
+        </div>
+        <div class="toast" id="season-form-toast"></div>
+      </form>
+    </dialog>
+
     <dialog class="modal" id="race-modal">
       <div class="modal-header">
         <h2 id="race-form-title">新增赛程</h2>
@@ -44,7 +63,7 @@
         <div class="form-grid-4">
           <div class="field">
             <label for="race-season">赛季年份</label>
-            <input id="race-season" type="number" min="1949" max="2100" required />
+            <input id="race-season" type="number" min="1949" required readonly />
           </div>
           <div class="field">
             <label for="race-round">分站序号</label>
@@ -164,6 +183,7 @@
             <span><i class="legend-dot upcoming"></i>待开始</span>
           </div>
           <div class="calendar-admin-actions" id="calendar-admin-actions" hidden>
+            <button type="button" class="btn-ghost" id="add-season-btn">新增赛季</button>
             <button type="button" class="btn-ghost" id="sync-schedules-btn">同步官网日程</button>
             <button type="button" class="btn-ghost" id="sync-finished-results-btn">同步已完赛成绩</button>
             <button type="button" class="btn-primary calendar-add-btn" id="add-race-btn">新增赛程</button>
@@ -182,9 +202,11 @@
   <script>
     const RACE_API = "/api/races";
     const RIDER_API = "/api/riders";
+    const SEASON_API = "/api/seasons";
     let currentUser = null;
     let isAdmin = false;
     let allEvents = [];
+    let allSeasons = [];
     let eventsById = new Map();
     let selectedSeason = null;
     let selectedResultRace = null;
@@ -193,6 +215,7 @@
     let selectedScheduleRace = null;
     let scheduleData = null;
     let allRiders = [];
+    let allRidersSeason = null;
 
     const grid = document.getElementById("race-grid");
     const seasonSelect = document.getElementById("season-select");
@@ -213,6 +236,9 @@
     const resultsToast = document.getElementById("results-toast");
     const editResultsButton = document.getElementById("edit-results-btn");
     const syncResultsButton = document.getElementById("sync-results-btn");
+    const seasonModal = document.getElementById("season-modal");
+    const seasonForm = document.getElementById("season-form");
+    const seasonFormToast = document.getElementById("season-form-toast");
     const syncSchedulesButton = document.getElementById("sync-schedules-btn");
     const syncFinishedResultsButton = document.getElementById("sync-finished-results-btn");
 
@@ -305,11 +331,15 @@
     }
 
     function renderSeasonOptions(preferredSeason = selectedSeason) {
-      const seasons = [...new Set(allEvents.map((event) => event.season))].sort((a, b) => b - a);
+      const seasons = [...new Set([
+        ...allSeasons.map((season) => Number(season.year)),
+        ...allEvents.map((event) => Number(event.season)),
+      ])].sort((a, b) => b - a);
       const currentYear = new Date().getFullYear();
       selectedSeason = seasons.includes(Number(preferredSeason))
         ? Number(preferredSeason)
         : (seasons.includes(currentYear) ? currentYear : (seasons[0] || currentYear));
+      rememberSelectedSeason(selectedSeason);
       seasonSelect.innerHTML = seasons.length
         ? seasons.map((season) => `<option value="${season}" ${season === selectedSeason ? "selected" : ""}>${season}</option>`).join("")
         : `<option value="${selectedSeason}">${selectedSeason}</option>`;
@@ -317,8 +347,12 @@
 
     async function loadEvents(preferredSeason = selectedSeason) {
       try {
-        const result = await apiRequest(RACE_API);
-        allEvents = result.data || [];
+        const [raceResult, seasonResult] = await Promise.all([
+          apiRequest(RACE_API),
+          apiRequest(SEASON_API),
+        ]);
+        allEvents = raceResult.data || [];
+        allSeasons = seasonResult.data || [];
         renderSeasonOptions(preferredSeason);
         renderCalendar();
         showToast(calendarToast, "");
@@ -498,15 +532,16 @@
       }
     }
 
-    async function ensureRidersLoaded() {
-      if (allRiders.length) return;
-      const response = await apiRequest(RIDER_API);
+    async function ensureRidersLoaded(season) {
+      if (allRiders.length && allRidersSeason === season) return;
+      const response = await apiRequest(`${RIDER_API}?season=${season}`);
       allRiders = (response.data || []).sort((a, b) => {
         const aNumber = Number(a.rider_number);
         const bNumber = Number(b.rider_number);
         if (Number.isFinite(aNumber) && Number.isFinite(bNumber)) return aNumber - bNumber;
         return String(a.rider_number).localeCompare(String(b.rider_number));
       });
+      allRidersSeason = season;
     }
 
     function riderOptions(selectedId) {
@@ -545,7 +580,7 @@
     async function openResultsEditor() {
       if (!resultData || !resultData.availability?.[selectedResultType]?.available) return;
       try {
-        await ensureRidersLoaded();
+        await ensureRidersLoaded(selectedResultRace.season);
         resultEditorList.innerHTML = "";
         const rows = resultData[selectedResultType] || [];
         rows.forEach(addResultEditorRow);
@@ -620,12 +655,48 @@
       document.getElementById("users-link").hidden = !isAdmin;
       document.getElementById("logs-link").hidden = !isAdmin;
       document.getElementById("calendar-admin-actions").hidden = !isAdmin;
-      await loadEvents();
+      await loadEvents(readSelectedSeason());
     }
 
     seasonSelect.addEventListener("change", () => {
       selectedSeason = Number(seasonSelect.value);
+      rememberSelectedSeason(selectedSeason);
       renderCalendar();
+    });
+    document.getElementById("add-season-btn").addEventListener("click", () => {
+      const currentYear = new Date().getFullYear();
+      const input = document.getElementById("new-season-year");
+      input.max = currentYear;
+      const used = new Set(allSeasons.map((item) => Number(item.year)));
+      let candidate = currentYear;
+      while (candidate >= 1949 && used.has(candidate)) candidate -= 1;
+      input.value = candidate;
+      showToast(seasonFormToast, "");
+      seasonModal.showModal();
+    });
+    const closeSeasonModal = () => seasonModal.close();
+    document.getElementById("season-modal-close").addEventListener("click", closeSeasonModal);
+    document.getElementById("season-cancel-btn").addEventListener("click", closeSeasonModal);
+    seasonModal.addEventListener("click", (event) => { if (event.target === seasonModal) closeSeasonModal(); });
+    seasonForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const year = Number(document.getElementById("new-season-year").value);
+      const button = seasonForm.querySelector('button[type="submit"]');
+      button.disabled = true;
+      try {
+        const result = await apiRequest(SEASON_API, {
+          method: "POST",
+          body: JSON.stringify({ year }),
+        });
+        closeSeasonModal();
+        rememberSelectedSeason(year);
+        await loadEvents(year);
+        showToast(calendarToast, result.message || `${year} 赛季创建成功`);
+      } catch (err) {
+        showToast(seasonFormToast, err.message, true);
+      } finally {
+        button.disabled = false;
+      }
     });
     document.getElementById("add-race-btn").addEventListener("click", openCreateModal);
     syncSchedulesButton.addEventListener("click", async () => {
@@ -641,6 +712,7 @@
           body: JSON.stringify({ season: selectedSeason }),
         });
         const summary = result.data || {};
+        await loadEvents(selectedSeason);
         showToast(calendarToast, `同步完成：${summary.events || 0} 个分站、${summary.items || 0} 个日程环节，时间均为北京时间`);
       } catch (err) {
         showToast(calendarToast, err.message, true);

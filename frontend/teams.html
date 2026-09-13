@@ -63,8 +63,15 @@
 
     <section class="panel team-list-panel">
       <div class="panel-heading">
-        <h2>车队总览</h2>
+        <div class="standings-heading-left">
+          <h2>车队总览</h2>
+          <label class="season-picker">赛季
+            <select id="team-season-select" aria-label="选择车队名单赛季"></select>
+          </label>
+          <span class="role-tag" id="roster-status">名单未完成</span>
+        </div>
         <div class="entity-admin-actions" id="team-admin-actions" hidden>
+          <button type="button" class="btn-ghost" id="confirm-roster-btn">确认名单完成</button>
           <button type="button" class="btn-ghost" id="sync-roster-btn">同步官网车队与车手</button>
           <button type="button" class="btn-primary btn-add" id="add-team-btn">新增车队</button>
         </div>
@@ -105,13 +112,15 @@
   <script src="/assets/js/api.js"></script>
   <script>
     const API = "/api/teams";
-    const TEAM_DRAFT_KEY = "motogp:team:create-draft:v1";
+    const TEAM_DRAFT_KEY = "motogp:team:create-draft:v2";
     let currentUser = null;
     let isAdmin = false;
     let teamsById = new Map();
     let currentTeams = [];
     let manufacturerSortDirection = "asc";
     let draftSaveTimer = null;
+    let allSeasons = [];
+    let selectedSeason = readSelectedSeason() || new Date().getFullYear();
     const manufacturerCollator = new Intl.Collator("zh-CN", {
       sensitivity: "base",
       numeric: true,
@@ -136,6 +145,28 @@
     const opsTh = document.getElementById("ops-th");
     const manufacturerSortBtn = document.getElementById("manufacturer-sort-btn");
     const syncRosterBtn = document.getElementById("sync-roster-btn");
+    const seasonSelect = document.getElementById("team-season-select");
+    const rosterStatus = document.getElementById("roster-status");
+    const confirmRosterBtn = document.getElementById("confirm-roster-btn");
+
+    const teamDraftKey = () => `${TEAM_DRAFT_KEY}:${selectedSeason}`;
+    const selectedSeasonInfo = () => allSeasons.find((item) => Number(item.year) === selectedSeason);
+
+    function renderSeasonState() {
+      seasonSelect.innerHTML = allSeasons.map((item) =>
+        `<option value="${item.year}" ${Number(item.year) === selectedSeason ? "selected" : ""}>${item.year}</option>`
+      ).join("");
+      const complete = Boolean(selectedSeasonInfo()?.roster_complete);
+      rosterStatus.textContent = complete ? "名单已确认" : "名单未完成";
+      rosterStatus.classList.toggle("roster-complete", complete);
+      confirmRosterBtn.textContent = complete ? "重新编辑名单" : "确认名单完成";
+    }
+
+    async function refreshSeasonState() {
+      const result = await apiRequest("/api/seasons");
+      allSeasons = result.data || [];
+      renderSeasonState();
+    }
 
     function showToast(el, message, isError = false) {
       el.textContent = message;
@@ -171,12 +202,12 @@
       try {
         const draft = getTeamFormData();
         if (!Object.values(draft).some(Boolean)) {
-          localStorage.removeItem(TEAM_DRAFT_KEY);
+          localStorage.removeItem(teamDraftKey());
           draftHint.textContent = "新增内容会自动保存为本地草稿";
           return;
         }
         localStorage.setItem(
-          TEAM_DRAFT_KEY,
+          teamDraftKey(),
           JSON.stringify({ ...draft, saved_at: Date.now() })
         );
         draftHint.textContent = "草稿已自动保存";
@@ -196,7 +227,7 @@
       clearTimeout(draftSaveTimer);
       draftSaveTimer = null;
       try {
-        localStorage.removeItem(TEAM_DRAFT_KEY);
+        localStorage.removeItem(teamDraftKey());
       } catch (err) {
         // 存储不可用时不影响已经成功提交的数据。
       }
@@ -204,7 +235,7 @@
 
     function restoreTeamDraft() {
       try {
-        const draft = JSON.parse(localStorage.getItem(TEAM_DRAFT_KEY) || "null");
+        const draft = JSON.parse(localStorage.getItem(teamDraftKey()) || "null");
         if (!draft) return false;
         teamNameInput.value = draft.name || "";
         manufacturerInput.value = draft.manufacturer || "";
@@ -212,7 +243,7 @@
         return true;
       } catch (err) {
         try {
-          localStorage.removeItem(TEAM_DRAFT_KEY);
+          localStorage.removeItem(teamDraftKey());
         } catch (storageError) {
           // 忽略浏览器禁用本地存储的情况。
         }
@@ -281,6 +312,7 @@
     async function loadTeams() {
       try {
         const params = new URLSearchParams();
+        params.set("season", selectedSeason);
         const name = document.getElementById("filter-team-name").value.trim();
         const manufacturer = document.getElementById("filter-manufacturer").value.trim();
         if (name) params.set("name", name);
@@ -308,6 +340,13 @@
         ? "管理员可对车队信息进行增删改查"
         : "普通用户仅可查看车队信息";
 
+      const seasonResult = await apiRequest("/api/seasons");
+      allSeasons = seasonResult.data || [];
+      const available = allSeasons.map((item) => Number(item.year));
+      selectedSeason = available.includes(selectedSeason) ? selectedSeason : (available[0] || new Date().getFullYear());
+      rememberSelectedSeason(selectedSeason);
+      renderSeasonState();
+
       if (isAdmin) {
         document.getElementById("team-admin-actions").hidden = false;
         document.getElementById("users-link").hidden = false;
@@ -323,7 +362,7 @@
 
     syncRosterBtn.addEventListener("click", async () => {
       if (!isAdmin) return;
-      const season = new Date().getFullYear();
+      const season = selectedSeason;
       if (!confirm(`确认从 MotoGP 官网同步 ${season} 赛季车队和车手资料吗？本地同一对象会更新，手工填写的中文名会保留。`)) return;
       const originalText = syncRosterBtn.textContent;
       syncRosterBtn.disabled = true;
@@ -335,6 +374,7 @@
           body: JSON.stringify({ season }),
         });
         await loadTeams();
+        await refreshSeasonState();
         const summary = result.data || {};
         const teamsSummary = summary.teams || {};
         const ridersSummary = summary.riders || {};
@@ -370,6 +410,7 @@
       if (!isAdmin) return;
 
       const payload = getTeamFormData();
+      payload.season = selectedSeason;
       const id = teamIdInput.value;
       if (id) payload.version = Number(teamVersionInput.value);
       submitBtn.disabled = true;
@@ -385,11 +426,13 @@
           clearTeamDraft();
         }
         await loadTeams();
+        await refreshSeasonState();
         closeModal(false);
         showToast(listToast, successMessage);
       } catch (err) {
         if (err.status === 409) {
           await loadTeams();
+          await refreshSeasonState();
           showToast(toast, `${err.message}，列表已刷新，请关闭窗口后重新编辑`, true);
         } else {
           showToast(toast, err.message, true);
@@ -454,13 +497,42 @@
         const id = delBtn.getAttribute("data-id");
         if (!confirm("确认删除该车队吗？")) return;
         try {
-          await apiRequest(`${API}/${id}`, { method: "DELETE" });
+          await apiRequest(`${API}/${id}?season=${selectedSeason}`, { method: "DELETE" });
           showToast(listToast, "删除成功");
           if (teamIdInput.value === id) resetForm();
           await loadTeams();
         } catch (err) {
           showToast(listToast, err.message, true);
         }
+      }
+    });
+
+    seasonSelect.addEventListener("change", async () => {
+      selectedSeason = Number(seasonSelect.value);
+      rememberSelectedSeason(selectedSeason);
+      document.getElementById("team-filter-form").reset();
+      renderSeasonState();
+      await loadTeams();
+    });
+
+    confirmRosterBtn.addEventListener("click", async () => {
+      if (!isAdmin) return;
+      const info = selectedSeasonInfo();
+      if (!info) return;
+      const complete = !info.roster_complete;
+      if (!confirm(complete
+        ? `确认 ${selectedSeason} 赛季车队与车手名单已全部录入完成吗？确认后才可录入积分。`
+        : `确认重新开放 ${selectedSeason} 赛季名单编辑吗？`)) return;
+      try {
+        const result = await apiRequest(`/api/seasons/${selectedSeason}/roster-status`, {
+          method: "PUT",
+          body: JSON.stringify({ complete, version: info.version }),
+        });
+        await refreshSeasonState();
+        showToast(listToast, result.message);
+      } catch (err) {
+        await refreshSeasonState();
+        showToast(listToast, err.message, true);
       }
     });
 

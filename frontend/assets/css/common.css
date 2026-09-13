@@ -106,12 +106,16 @@ body {
 .calendar-toolbar-side {
   flex: 0 0 auto;
   margin-left: auto;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .calendar-admin-actions {
   display: flex;
   align-items: center;
   gap: 9px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .calendar-admin-actions button {
@@ -1078,6 +1082,24 @@ header.page-header p {
   font-size: 0.75rem;
 }
 
+.role-tag.roster-complete {
+  color: #9ff0bf;
+  border-color: rgba(83, 210, 132, 0.5);
+  background: rgba(31, 126, 72, 0.25);
+}
+
+.translation-pending {
+  display: block;
+  width: max-content;
+  margin: 4px auto 0;
+  padding: 1px 6px;
+  border: 1px solid rgba(255, 190, 74, 0.45);
+  border-radius: 999px;
+  color: #ffd27a;
+  font-size: 0.68rem;
+  line-height: 1.3;
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--panel-border);
@@ -1346,6 +1368,13 @@ header.page-header p {
 .field input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(126, 184, 218, 0.18);
+}
+
+.form-hint {
+  margin: -2px 0 4px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.6;
 }
 
 .actions {
@@ -1643,16 +1672,15 @@ table {
   line-height: 1.45;
 }
 
-.rider-table th:nth-child(1) { width: 6%; }
-.rider-table th:nth-child(2) { width: 12%; }
-.rider-table th:nth-child(3) { width: 12%; }
-.rider-table th:nth-child(4) { width: 6%; }
-.rider-table th:nth-child(5) { width: 7%; }
-.rider-table th:nth-child(6) { width: 15%; }
-.rider-table th:nth-child(7) { width: 12%; }
-.rider-table th:nth-child(8) { width: 9%; }
-.rider-table th:nth-child(9) { width: 11%; }
-.rider-table th:nth-child(10) { width: 10%; }
+.rider-table th:nth-child(1) { width: 7%; }
+.rider-table th:nth-child(2) { width: 13%; }
+.rider-table th:nth-child(3) { width: 13%; }
+.rider-table th:nth-child(4) { width: 8%; }
+.rider-table th:nth-child(5) { width: 17%; }
+.rider-table th:nth-child(6) { width: 14%; }
+.rider-table th:nth-child(7) { width: 10%; }
+.rider-table th:nth-child(8) { width: 10%; }
+.rider-table th:nth-child(9) { width: 8%; }
 
 .rider-table thead th {
   position: sticky;

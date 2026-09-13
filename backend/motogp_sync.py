@@ -13,43 +13,42 @@ from config import MOTOGP_API_BASE_URL, MOTOGP_SYNC_TIMEOUT_SECONDS
 
 BEIJING_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
+EVENT_COUNTRY_ZH = {
+    "THA": "泰国",
+    "ARG": "阿根廷",
+    "AME": "美国",
+    "QAT": "卡塔尔",
+    "SPA": "西班牙",
+    "FRA": "法国",
+    "GBR": "英国",
+    "ARA": "阿拉贡",
+    "ITA": "意大利",
+    "NED": "荷兰",
+    "GER": "德国",
+    "CZE": "捷克",
+    "AUT": "奥地利",
+    "HUN": "匈牙利",
+    "CAT": "加泰罗尼亚",
+    "RSM": "圣马力诺",
+    "JPN": "日本",
+    "INA": "印度尼西亚",
+    "AUS": "澳大利亚",
+    "MAL": "马来西亚",
+    "POR": "葡萄牙",
+    "VAL": "瓦伦西亚",
+    "BRA": "巴西",
+}
+
+
+def _country_flag(country_code: str):
+    code = str(country_code or "").strip().upper()
+    if len(code) != 2 or not code.isalpha():
+        return "🏁"
+    return "".join(chr(0x1F1E6 + ord(char) - ord("A")) for char in code)
+
 
 class OfficialApiError(ValueError):
     """官方接口不可用或返回了无法验证的数据。"""
-
-
-OFFICIAL_RIDER_CHINESE_NAMES = {
-    "Ai Ogura": "小椋蓝",
-    "Alex Marquez": "亚历克斯·马奎斯",
-    "Alex Rins": "亚历克斯·林斯",
-    "Brad Binder": "布拉德·宾德",
-    "Diogo Moreira": "迪奥戈·莫雷拉",
-    "Enea Bastianini": "埃内亚·巴斯蒂亚尼尼",
-    "Fabio Di Giannantonio": "法比奥·迪·詹南托尼奥",
-    "Fabio Quartararo": "法比奥·夸塔拉罗",
-    "Fermin Aldeguer": "费尔明·阿尔德格尔",
-    "Francesco Bagnaia": "弗朗切斯科·巴尼亚亚",
-    "Franco Morbidelli": "弗兰科·莫比德利",
-    "Jack Miller": "杰克·米勒",
-    "Joan Mir": "胡安·米尔",
-    "Johann Zarco": "约翰·扎尔科",
-    "Jorge Martin": "乔治·马丁",
-    "Luca Marini": "卢卡·马里尼",
-    "Marc Marquez": "马克·马奎斯",
-    "Marco Bezzecchi": "马尔科·贝泽基",
-    "Maverick Vinales": "马弗里克·比尼亚莱斯",
-    "Maverick Viñales": "马弗里克·比尼亚莱斯",
-    "Pedro Acosta": "佩德罗·阿科斯塔",
-    "Raul Fernandez": "劳尔·费尔南德斯",
-    "Toprak Razgatlioglu": "托普拉克·拉兹加特勒奥卢",
-    "Michele Pirro": "米凯莱·皮罗",
-    "Augusto Fernandez": "奥古斯托·费尔南德斯",
-    "Jonas Folger": "乔纳斯·福尔格",
-    "Cal Crutchlow": "卡尔·克拉奇洛",
-    "Iker Lecuona": "伊克尔·莱库奥纳",
-    "Pol Espargaro": "波尔·埃斯帕加罗",
-    "Lorenzo Savadori": "洛伦佐·萨瓦多里",
-}
 
 
 def _get_json(path: str, params=None):
@@ -116,6 +115,11 @@ def fetch_season_schedules(season_year: int):
 
     schedules = []
     for fallback_round, event in enumerate(grand_prix_events, start=1):
+        circuit = event.get("circuit") or {}
+        shortname = str(event.get("shortname") or "").strip().upper()
+        country_code = str(
+            event.get("country") or circuit.get("iso_code") or ""
+        ).strip().upper()
         items = []
         seen = set()
         for session in event.get("broadcasts") or []:
@@ -169,6 +173,15 @@ def fetch_season_schedules(season_year: int):
             "time_zone": str(event.get("time_zone") or ""),
             "start_date": str(event.get("date_start") or "")[:10],
             "end_date": str(event.get("date_end") or "")[:10],
+            "flag": _country_flag(country_code),
+            "country": EVENT_COUNTRY_ZH.get(
+                shortname,
+                str(circuit.get("country") or event.get("additional_name") or shortname),
+            ),
+            "country_en": str(
+                event.get("additional_name") or circuit.get("country") or shortname
+            ).strip().upper(),
+            "circuit": str(circuit.get("name") or event.get("name") or "未知赛道").strip(),
             "items": items,
         })
     return {"season": season_year, "events": schedules}
@@ -484,9 +497,8 @@ def fetch_rider_profile(rider_api_id: str, season_year: int, appearance: dict):
     return {
         "rider_number": str(appearance["rider_number"]),
         "english_name": full_name,
-        # 官网未提供中文译名；已知车手使用常见译名，其余使用官方英文名作为可编辑回退值。
-        "chinese_name": OFFICIAL_RIDER_CHINESE_NAMES.get(full_name, full_name),
-        "nickname": str(profile.get("nickname") or ""),
+        # 官网未提供中文译名；英文名仅作为待管理员审核的回退值。
+        "chinese_name": full_name,
         "country_iso": str((profile.get("country") or {}).get("iso") or appearance.get("country_iso") or ""),
         "nationality": str((profile.get("country") or {}).get("name") or appearance.get("country_name") or "未知"),
         "team_name": str(
@@ -504,7 +516,7 @@ def fetch_season_roster(season_year: int):
     """读取指定赛季 MotoGP 车手详情及其官方车队资料。
 
     积分接口提供当季全部参赛车手、车号和制造商；车手详情接口补充出生信息、
-    昵称以及不受赞助冠名变化影响的车队标识。详情请求并发数保持较低，避免对
+    出生信息以及不受赞助冠名变化影响的车队标识。详情请求并发数保持较低，避免对
     官方公开接口造成突发压力。
     """
     season, category = _find_season_and_motogp_category(season_year)

@@ -97,7 +97,6 @@
       rider_number: "车手编号",
       english_name: "英文名",
       chinese_name: "中文名",
-      nickname: "昵称",
       nationality: "国籍",
       team_name: "所属车队",
       bike: "驾驶车辆",
@@ -131,7 +130,7 @@
     }
 
     function entityLabel(type) {
-      return { rider: "车手", team: "车队", race: "赛程", race_schedule: "分站日程", race_result: "分站排名", standing: "车手积分", user: "账号" }[type] || type;
+      return { rider: "车手", team: "车队", season: "赛季", race: "赛程", race_schedule: "分站日程", race_result: "分站排名", standing: "车手积分", user: "账号" }[type] || type;
     }
 
     function displayValue(value) {
@@ -142,8 +141,9 @@
     }
 
     function entityFields(type) {
-      if (type === "rider") return ["rider_number", "english_name", "chinese_name", "nickname", "nationality", "team_name", "bike", "birth_date", "birth_place"];
+      if (type === "rider") return ["rider_number", "english_name", "chinese_name", "nationality", "team_name", "bike", "birth_date", "birth_place"];
       if (type === "team") return ["name", "manufacturer", "members"];
+      if (type === "season") return ["season"];
       if (type === "race") return ["season", "round_number", "flag", "country", "country_en", "start_date", "end_date", "circuit"];
       if (type === "race_schedule") return ["entries"];
       if (type === "race_result") return ["race_type", "entries"];

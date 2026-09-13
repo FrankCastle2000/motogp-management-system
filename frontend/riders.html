@@ -53,10 +53,7 @@
           <div class="field">
             <label for="chinese-name">中文名</label>
             <input id="chinese-name" maxlength="64" required placeholder="弗朗切斯科·巴格尼亚" />
-          </div>
-          <div class="field">
-            <label for="nickname">昵称</label>
-            <input id="nickname" maxlength="64" placeholder="Pecco" />
+            <small class="form-hint">标准译名；修改后会同步应用到该车手的所有赛季</small>
           </div>
           <div class="field">
             <label for="nationality">国籍</label>
@@ -93,15 +90,22 @@
 
     <section class="panel rider-list-panel">
       <div class="panel-heading">
-        <h2>车手总览</h2>
+        <div class="standings-heading-left">
+          <h2>车手总览</h2>
+          <label class="season-picker">赛季
+            <select id="rider-season-select" aria-label="选择车手名单赛季"></select>
+          </label>
+          <span class="role-tag" id="roster-status">名单未完成</span>
+        </div>
         <div class="entity-admin-actions" id="rider-admin-actions" hidden>
+          <button type="button" class="btn-ghost" id="confirm-roster-btn">确认名单完成</button>
           <button type="button" class="btn-ghost" id="sync-roster-btn">同步官网车队与车手</button>
           <button type="button" class="btn-primary btn-add" id="add-rider-btn">新增车手</button>
         </div>
       </div>
       <form class="filter-bar rider-filter-bar" id="rider-filter-form">
         <input id="filter-rider-number" placeholder="车手编号" aria-label="按车手编号搜索" />
-        <input id="filter-rider-name" placeholder="英文名、中文名或昵称" aria-label="按姓名搜索" />
+        <input id="filter-rider-name" placeholder="英文名或中文名" aria-label="按姓名搜索" />
         <input id="filter-nationality" placeholder="国籍" aria-label="按国籍搜索" />
         <select id="filter-team-id" aria-label="按车队筛选"><option value="">全部车队</option></select>
         <div class="filter-actions" style="display:grid;grid-template-columns:72px 72px;gap:8px;flex:0 0 152px">
@@ -120,7 +124,6 @@
               </th>
               <th>英文名</th>
               <th>中文名</th>
-              <th>昵称</th>
               <th>国籍</th>
               <th>所属车队</th>
               <th>驾驶车辆</th>
@@ -135,7 +138,7 @@
           </thead>
           <tbody id="rider-tbody">
             <tr>
-              <td colspan="10" class="empty">加载中...</td>
+              <td colspan="9" class="empty">加载中...</td>
             </tr>
           </tbody>
         </table>
@@ -147,7 +150,7 @@
   <script src="/assets/js/api.js"></script>
   <script>
     const API = "/api/riders";
-    const RIDER_DRAFT_KEY = "motogp:rider:create-draft:v1";
+    const RIDER_DRAFT_KEY = "motogp:rider:create-draft:v2";
     let currentUser = null;
     let isAdmin = false;
     let teams = [];
@@ -156,6 +159,8 @@
     let sortKey = "rider_number";
     let sortDirection = "asc";
     let draftSaveTimer = null;
+    let allSeasons = [];
+    let selectedSeason = readSelectedSeason() || new Date().getFullYear();
     const riderNumberCollator = new Intl.Collator("zh-CN", {
       numeric: true,
       sensitivity: "base",
@@ -179,6 +184,29 @@
     const syncRosterBtn = document.getElementById("sync-roster-btn");
     const tbody = document.getElementById("rider-tbody");
     const opsTh = document.getElementById("ops-th");
+    const seasonSelect = document.getElementById("rider-season-select");
+    const rosterStatus = document.getElementById("roster-status");
+    const confirmRosterBtn = document.getElementById("confirm-roster-btn");
+
+    const riderDraftKey = () => `${RIDER_DRAFT_KEY}:${selectedSeason}`;
+    const selectedSeasonInfo = () => allSeasons.find((item) => Number(item.year) === selectedSeason);
+
+    function renderSeasonState() {
+      seasonSelect.innerHTML = allSeasons.map((item) =>
+        `<option value="${item.year}" ${Number(item.year) === selectedSeason ? "selected" : ""}>${item.year}</option>`
+      ).join("");
+      const info = selectedSeasonInfo();
+      const complete = Boolean(info?.roster_complete);
+      rosterStatus.textContent = complete ? "名单已确认" : "名单未完成";
+      rosterStatus.classList.toggle("roster-complete", complete);
+      confirmRosterBtn.textContent = complete ? "重新编辑名单" : "确认名单完成";
+    }
+
+    async function refreshSeasonState() {
+      const result = await apiRequest("/api/seasons");
+      allSeasons = result.data || [];
+      renderSeasonState();
+    }
 
     function showToast(el, message, isError = false) {
       el.textContent = message;
@@ -186,7 +214,7 @@
     }
 
     function colSpan() {
-      return isAdmin ? 10 : 9;
+      return isAdmin ? 9 : 8;
     }
 
     function resetForm() {
@@ -206,7 +234,6 @@
         rider_number: document.getElementById("rider-number").value.trim(),
         english_name: document.getElementById("english-name").value.trim(),
         chinese_name: document.getElementById("chinese-name").value.trim(),
-        nickname: document.getElementById("nickname").value.trim(),
         nationality: document.getElementById("nationality").value.trim(),
         team_id: teamSelect.value || null,
         bike: document.getElementById("bike").value.trim(),
@@ -222,12 +249,12 @@
       try {
         const draft = getRiderFormData();
         if (!Object.values(draft).some(Boolean)) {
-          localStorage.removeItem(RIDER_DRAFT_KEY);
+          localStorage.removeItem(riderDraftKey());
           draftHint.textContent = "新增内容会自动保存为本地草稿";
           return;
         }
         localStorage.setItem(
-          RIDER_DRAFT_KEY,
+          riderDraftKey(),
           JSON.stringify({ ...draft, saved_at: Date.now() })
         );
         draftHint.textContent = "草稿已自动保存";
@@ -247,7 +274,7 @@
       clearTimeout(draftSaveTimer);
       draftSaveTimer = null;
       try {
-        localStorage.removeItem(RIDER_DRAFT_KEY);
+        localStorage.removeItem(riderDraftKey());
       } catch (err) {
         // 存储不可用时不影响已经成功提交的数据。
       }
@@ -255,12 +282,11 @@
 
     function restoreRiderDraft() {
       try {
-        const draft = JSON.parse(localStorage.getItem(RIDER_DRAFT_KEY) || "null");
+        const draft = JSON.parse(localStorage.getItem(riderDraftKey()) || "null");
         if (!draft) return false;
         document.getElementById("rider-number").value = draft.rider_number || "";
         document.getElementById("english-name").value = draft.english_name || "";
         document.getElementById("chinese-name").value = draft.chinese_name || "";
-        document.getElementById("nickname").value = draft.nickname || "";
         document.getElementById("nationality").value = draft.nationality || "";
         renderTeamOptions(draft.team_id || "");
         document.getElementById("bike").value = draft.bike || "";
@@ -270,7 +296,7 @@
         return true;
       } catch (err) {
         try {
-          localStorage.removeItem(RIDER_DRAFT_KEY);
+          localStorage.removeItem(riderDraftKey());
         } catch (storageError) {
           // 忽略浏览器禁用本地存储的情况。
         }
@@ -305,7 +331,7 @@
     }
 
     async function loadTeams() {
-      const result = await apiRequest("/api/teams");
+      const result = await apiRequest(`/api/teams?season=${selectedSeason}`);
       teams = result.data || [];
       renderTeamOptions();
       filterTeamSelect.innerHTML = '<option value="">全部车队</option>' + teams
@@ -346,8 +372,7 @@
             <tr>
               <td>${escapeHtml(r.rider_number)}</td>
               <td>${escapeHtml(r.english_name)}</td>
-              <td>${escapeHtml(r.chinese_name)}</td>
-              <td>${escapeHtml(r.nickname || "-")}</td>
+              <td>${escapeHtml(r.chinese_name)}${r.chinese_name_reviewed ? "" : '<span class="translation-pending">待确认</span>'}</td>
               <td>${escapeHtml(r.nationality)}</td>
               <td>${escapeHtml(r.team_name || "-")}</td>
               <td>${escapeHtml(r.bike)}</td>
@@ -378,6 +403,7 @@
     async function loadRiders() {
       try {
         const params = new URLSearchParams();
+        params.set("season", selectedSeason);
         const filters = {
           rider_number: document.getElementById("filter-rider-number").value.trim(),
           name: document.getElementById("filter-rider-name").value.trim(),
@@ -408,6 +434,12 @@
         ? "管理员可对车手信息进行增删改查"
         : "普通用户仅可查看车手信息";
 
+      const seasonResult = await apiRequest("/api/seasons");
+      allSeasons = seasonResult.data || [];
+      const available = allSeasons.map((item) => Number(item.year));
+      selectedSeason = available.includes(selectedSeason) ? selectedSeason : (available[0] || new Date().getFullYear());
+      rememberSelectedSeason(selectedSeason);
+      renderSeasonState();
       await loadTeams();
       if (isAdmin) {
         document.getElementById("rider-admin-actions").hidden = false;
@@ -424,7 +456,7 @@
 
     syncRosterBtn.addEventListener("click", async () => {
       if (!isAdmin) return;
-      const season = new Date().getFullYear();
+      const season = selectedSeason;
       if (!confirm(`确认从 MotoGP 官网同步 ${season} 赛季车队和车手资料吗？本地同一对象会更新，手工填写的中文名会保留。`)) return;
       const originalText = syncRosterBtn.textContent;
       syncRosterBtn.disabled = true;
@@ -437,6 +469,7 @@
         });
         await loadTeams();
         await loadRiders();
+        await refreshSeasonState();
         const summary = result.data || {};
         const teamsSummary = summary.teams || {};
         const ridersSummary = summary.riders || {};
@@ -475,6 +508,7 @@
       if (!isAdmin) return;
 
       const payload = getRiderFormData();
+      payload.season = selectedSeason;
       const id = riderIdInput.value;
       if (id) payload.version = Number(riderVersionInput.value);
       submitBtn.disabled = true;
@@ -490,11 +524,13 @@
           clearRiderDraft();
         }
         await loadRiders();
+        await refreshSeasonState();
         closeModal(false);
         showToast(listToast, successMessage);
       } catch (err) {
         if (err.status === 409) {
           await loadRiders();
+          await refreshSeasonState();
           showToast(toast, `${err.message}，列表已刷新，请关闭窗口后重新编辑`, true);
         } else {
           showToast(toast, err.message, true);
@@ -548,7 +584,6 @@
         document.getElementById("rider-number").value = r.rider_number;
         document.getElementById("english-name").value = r.english_name;
         document.getElementById("chinese-name").value = r.chinese_name;
-        document.getElementById("nickname").value = r.nickname || "";
         document.getElementById("nationality").value = r.nationality;
         renderTeamOptions(r.team_id || "");
         document.getElementById("bike").value = r.bike;
@@ -567,13 +602,43 @@
         const id = delBtn.getAttribute("data-id");
         if (!confirm("确认删除该车手吗？")) return;
         try {
-          await apiRequest(`${API}/${id}`, { method: "DELETE" });
+          await apiRequest(`${API}/${id}?season=${selectedSeason}`, { method: "DELETE" });
           showToast(listToast, "删除成功");
           if (riderIdInput.value === id) resetForm();
           await loadRiders();
         } catch (err) {
           showToast(listToast, err.message, true);
         }
+      }
+    });
+
+    seasonSelect.addEventListener("change", async () => {
+      selectedSeason = Number(seasonSelect.value);
+      rememberSelectedSeason(selectedSeason);
+      document.getElementById("rider-filter-form").reset();
+      renderSeasonState();
+      await loadTeams();
+      await loadRiders();
+    });
+
+    confirmRosterBtn.addEventListener("click", async () => {
+      if (!isAdmin) return;
+      const info = selectedSeasonInfo();
+      if (!info) return;
+      const complete = !info.roster_complete;
+      if (!confirm(complete
+        ? `确认 ${selectedSeason} 赛季车队与车手名单已全部录入完成吗？确认后才可录入积分。`
+        : `确认重新开放 ${selectedSeason} 赛季名单编辑吗？`)) return;
+      try {
+        const result = await apiRequest(`/api/seasons/${selectedSeason}/roster-status`, {
+          method: "PUT",
+          body: JSON.stringify({ complete, version: info.version }),
+        });
+        await refreshSeasonState();
+        showToast(listToast, result.message);
+      } catch (err) {
+        await refreshSeasonState();
+        showToast(listToast, err.message, true);
       }
     });
 

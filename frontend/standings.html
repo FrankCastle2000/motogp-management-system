@@ -33,6 +33,25 @@
       </div>
     </header>
 
+    <dialog class="modal modal-sm" id="season-modal">
+      <div class="modal-header">
+        <h2>新增赛季</h2>
+        <button type="button" class="modal-close" id="season-modal-close" aria-label="关闭">×</button>
+      </div>
+      <form id="season-form">
+        <div class="field">
+          <label for="new-season-year">赛季年份</label>
+          <input id="new-season-year" type="number" min="1949" required />
+        </div>
+        <p class="form-hint">创建后会保留空页面，可继续同步或手工录入该赛季数据。</p>
+        <div class="actions">
+          <button type="submit" class="btn-primary" style="width:auto">创建赛季</button>
+          <button type="button" class="btn-ghost" id="season-cancel-btn">取消</button>
+        </div>
+        <div class="toast" id="season-form-toast"></div>
+      </form>
+    </dialog>
+
     <dialog class="modal modal-sm" id="standing-modal">
       <div class="modal-header">
         <h2 id="standing-form-title">新增积分记录</h2>
@@ -44,7 +63,7 @@
         <div class="form-grid">
           <div class="field">
             <label for="standing-season">赛季年份</label>
-            <input id="standing-season" type="number" min="1949" max="2100" required />
+            <input id="standing-season" type="number" min="1949" required readonly />
           </div>
           <div class="field">
             <label for="standing-rider">车手</label>
@@ -82,8 +101,10 @@
           <label class="season-picker">赛季
             <select id="standing-season-select" aria-label="选择积分榜赛季"></select>
           </label>
+          <span class="role-tag" id="standings-roster-status">名单未完成</span>
         </div>
         <div class="standings-admin-actions" id="standings-admin-actions" hidden>
+          <button type="button" class="btn-ghost" id="add-season-btn">新增赛季</button>
           <button type="button" class="btn-ghost" id="sync-standings-btn">刷新官方积分</button>
           <button type="button" class="btn-primary btn-add" id="add-standing-btn">新增记录</button>
         </div>
@@ -109,19 +130,21 @@
         </table>
       </div>
       <div class="toast" id="standings-toast"></div>
-      <p class="standings-source">初始数据来源：<a href="https://www.motogp.com/en/world-standing/2026/motogp/championship-standings" target="_blank" rel="noopener">MotoGP 官方 2026 车手积分榜</a>（更新于 2026-07-23）；仅展示系统中已存在的车手</p>
+      <p class="standings-source">数据来源：<a id="standings-source-link" href="https://www.motogp.com/en/world-standing/2026/motogp/championship-standings" target="_blank" rel="noopener">MotoGP 官方 2026 车手积分榜</a>；仅展示系统中已存在的车手</p>
     </section>
   </div>
 
   <script src="/assets/js/api.js"></script>
   <script>
     const STANDING_API = "/api/standings";
+    const SEASON_API = "/api/seasons";
     let currentUser = null;
     let isAdmin = false;
     let allStandings = [];
+    let allSeasons = [];
     let localRiders = [];
     let standingsById = new Map();
-    let selectedSeason = 2026;
+    let selectedSeason = readSelectedSeason() || new Date().getFullYear();
 
     const tbody = document.getElementById("standings-tbody");
     const seasonSelect = document.getElementById("standing-season-select");
@@ -130,6 +153,27 @@
     const formToast = document.getElementById("standing-form-toast");
     const pageToast = document.getElementById("standings-toast");
     const submitBtn = document.getElementById("standing-submit-btn");
+    const seasonModal = document.getElementById("season-modal");
+    const seasonForm = document.getElementById("season-form");
+    const seasonFormToast = document.getElementById("season-form-toast");
+    const rosterStatus = document.getElementById("standings-roster-status");
+    const syncStandingsBtn = document.getElementById("sync-standings-btn");
+    const addStandingBtn = document.getElementById("add-standing-btn");
+
+    const selectedSeasonInfo = () => allSeasons.find((item) => Number(item.year) === selectedSeason);
+
+    function renderRosterGate() {
+      const complete = Boolean(selectedSeasonInfo()?.roster_complete);
+      rosterStatus.textContent = complete ? "名单已确认" : "请先确认赛季名单";
+      rosterStatus.classList.toggle("roster-complete", complete);
+      if (isAdmin) {
+        syncStandingsBtn.disabled = !complete;
+        addStandingBtn.disabled = !complete;
+        const title = complete ? "" : "请先在车手信息或车队信息页面完成并确认当赛季名单";
+        syncStandingsBtn.title = title;
+        addStandingBtn.title = title;
+      }
+    }
 
     function showToast(el, message, isError = false) {
       el.textContent = message;
@@ -146,6 +190,9 @@
         .sort((a, b) => a.position - b.position || b.points - a.points);
       standingsById = new Map(rows.map((item) => [String(item.id), item]));
       document.getElementById("standings-summary").textContent = `${selectedSeason} 赛季 · ${rows.length} 名正式车手`;
+      const sourceLink = document.getElementById("standings-source-link");
+      sourceLink.href = `https://www.motogp.com/en/world-standing/${selectedSeason}/motogp/championship-standings`;
+      sourceLink.textContent = `MotoGP 官方 ${selectedSeason} 车手积分榜`;
       if (!rows.length) {
         tbody.innerHTML = `<tr><td colspan="${colSpan()}" class="empty">该赛季暂无积分记录</td></tr>`;
         return;
@@ -171,11 +218,19 @@
     }
 
     function renderSeasonOptions(preferred = selectedSeason) {
-      const seasons = [...new Set(allStandings.map((item) => item.season))].sort((a, b) => b - a);
-      selectedSeason = seasons.includes(Number(preferred)) ? Number(preferred) : (seasons[0] || 2026);
+      const seasons = [...new Set([
+        ...allSeasons.map((season) => Number(season.year)),
+        ...allStandings.map((item) => Number(item.season)),
+      ])].sort((a, b) => b - a);
+      const currentYear = new Date().getFullYear();
+      selectedSeason = seasons.includes(Number(preferred))
+        ? Number(preferred)
+        : (seasons.includes(currentYear) ? currentYear : (seasons[0] || currentYear));
+      rememberSelectedSeason(selectedSeason);
       seasonSelect.innerHTML = seasons.length
         ? seasons.map((year) => `<option value="${year}" ${year === selectedSeason ? "selected" : ""}>${year}</option>`).join("")
         : `<option value="${selectedSeason}">${selectedSeason}</option>`;
+      renderRosterGate();
     }
 
     function renderRiderOptions(selectedId = "") {
@@ -189,13 +244,15 @@
 
     async function loadData(preferredSeason = selectedSeason) {
       try {
-        const [standingResult, riderResult] = await Promise.all([
+        const [standingResult, seasonResult] = await Promise.all([
           apiRequest(STANDING_API),
-          apiRequest("/api/riders"),
+          apiRequest(SEASON_API),
         ]);
         allStandings = standingResult.data || [];
-        localRiders = riderResult.data || [];
+        allSeasons = seasonResult.data || [];
         renderSeasonOptions(preferredSeason);
+        const riderResult = await apiRequest(`/api/riders?season=${selectedSeason}`);
+        localRiders = riderResult.data || [];
         renderRiderOptions();
         renderRows();
         showToast(pageToast, "");
@@ -263,18 +320,54 @@
       await loadData();
     }
 
-    seasonSelect.addEventListener("change", () => {
+    seasonSelect.addEventListener("change", async () => {
       selectedSeason = Number(seasonSelect.value);
-      renderRows();
+      rememberSelectedSeason(selectedSeason);
+      await loadData(selectedSeason);
     });
-    document.getElementById("add-standing-btn").addEventListener("click", () => {
+    document.getElementById("add-season-btn").addEventListener("click", () => {
+      const currentYear = new Date().getFullYear();
+      const input = document.getElementById("new-season-year");
+      input.max = currentYear;
+      const used = new Set(allSeasons.map((item) => Number(item.year)));
+      let candidate = currentYear;
+      while (candidate >= 1949 && used.has(candidate)) candidate -= 1;
+      input.value = candidate;
+      showToast(seasonFormToast, "");
+      seasonModal.showModal();
+    });
+    const closeSeasonModal = () => seasonModal.close();
+    document.getElementById("season-modal-close").addEventListener("click", closeSeasonModal);
+    document.getElementById("season-cancel-btn").addEventListener("click", closeSeasonModal);
+    seasonModal.addEventListener("click", (event) => { if (event.target === seasonModal) closeSeasonModal(); });
+    seasonForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const year = Number(document.getElementById("new-season-year").value);
+      const button = seasonForm.querySelector('button[type="submit"]');
+      button.disabled = true;
+      try {
+        const result = await apiRequest(SEASON_API, {
+          method: "POST",
+          body: JSON.stringify({ year }),
+        });
+        closeSeasonModal();
+        rememberSelectedSeason(year);
+        await loadData(year);
+        showToast(pageToast, result.message || `${year} 赛季创建成功`);
+      } catch (err) {
+        showToast(seasonFormToast, err.message, true);
+      } finally {
+        button.disabled = false;
+      }
+    });
+    addStandingBtn.addEventListener("click", () => {
       resetForm();
       modal.showModal();
     });
-    document.getElementById("sync-standings-btn").addEventListener("click", async () => {
+    syncStandingsBtn.addEventListener("click", async () => {
       if (!isAdmin) return;
       if (!confirm(`确认从 MotoGP 官方接口刷新 ${selectedSeason} 赛季积分吗？本地积分将按车手编号更新，系统中不存在的替补车手会被跳过。`)) return;
-      const button = document.getElementById("sync-standings-btn");
+      const button = syncStandingsBtn;
       const originalText = button.textContent;
       button.disabled = true;
       button.textContent = "正在同步…";
