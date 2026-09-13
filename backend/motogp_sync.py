@@ -77,8 +77,8 @@ def _get_json(path: str, params=None):
         raise OfficialApiError("MotoGP 官方接口返回的数据格式无效") from exc
 
 
-def _parse_official_datetime(value):
-    """解析官方带时区 ISO 时间，并转换成北京时间。"""
+def _parse_official_datetime(value, target_timezone=BEIJING_TIMEZONE):
+    """解析官方带时区 ISO 时间，并按需转换到指定时区。"""
     text = str(value or "").strip()
     if not text:
         return None
@@ -86,7 +86,7 @@ def _parse_official_datetime(value):
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
         if parsed.tzinfo is None:
             raise ValueError("官方时间缺少时区")
-        return parsed.astimezone(BEIJING_TIMEZONE)
+        return parsed.astimezone(target_timezone) if target_timezone else parsed
     except ValueError as exc:
         raise OfficialApiError(f"官方日程包含无法识别的时间：{text}") from exc
 
@@ -116,11 +116,19 @@ def fetch_season_schedules(season_year: int):
     schedules = []
     for fallback_round, event in enumerate(grand_prix_events, start=1):
         circuit = event.get("circuit") or {}
+        source_start_date = str(event.get("date_start") or "")[:10]
+        source_end_date = str(event.get("date_end") or "")[:10]
+        timezone_name = str(event.get("time_zone") or "").strip()
+        try:
+            event_timezone = ZoneInfo(timezone_name) if timezone_name else None
+        except (KeyError, ValueError):
+            event_timezone = None
         shortname = str(event.get("shortname") or "").strip().upper()
         country_code = str(
             event.get("country") or circuit.get("iso_code") or ""
         ).strip().upper()
         items = []
+        local_session_dates = []
         seen = set()
         for session in event.get("broadcasts") or []:
             category = session.get("category") or {}
@@ -132,10 +140,20 @@ def fetch_season_schedules(season_year: int):
                 or not session_name
             ):
                 continue
-            starts_at = _parse_official_datetime(session.get("date_start"))
-            ends_at = _parse_official_datetime(session.get("date_end"))
-            if starts_at is None:
+            local_starts_at = _parse_official_datetime(
+                session.get("date_start"), event_timezone
+            )
+            local_ends_at = _parse_official_datetime(
+                session.get("date_end"), event_timezone
+            )
+            if local_starts_at is None:
                 continue
+            local_session_dates.append(local_starts_at.strftime("%Y-%m-%d"))
+            starts_at = local_starts_at.astimezone(BEIJING_TIMEZONE)
+            ends_at = (
+                local_ends_at.astimezone(BEIJING_TIMEZONE)
+                if local_ends_at is not None else None
+            )
             end_time = ""
             if ends_at is not None and ends_at > starts_at:
                 end_time = ends_at.strftime("%H:%M")
@@ -165,14 +183,25 @@ def fetch_season_schedules(season_year: int):
             round_number = int(event.get("sequence") or fallback_round)
         except (TypeError, ValueError):
             round_number = fallback_round
+        # 部分历史赛季的事件元数据把周末结束时间写在周六，但详细
+        # Session 仍完整覆盖到周日。以赛道当地的 Session 日期推导
+        # 周末边界，既能修正这类官方数据问题，也不会混用北京时间日期。
+        local_start_date = (
+            min(local_session_dates) if local_session_dates else source_start_date
+        )
+        local_end_date = (
+            max(local_session_dates) if local_session_dates else source_end_date
+        )
         schedules.append({
             "round_number": round_number,
             "official_event_id": str(event.get("id") or ""),
             "official_event_name": str(event.get("name") or ""),
             "shortname": str(event.get("shortname") or ""),
-            "time_zone": str(event.get("time_zone") or ""),
-            "start_date": str(event.get("date_start") or "")[:10],
-            "end_date": str(event.get("date_end") or "")[:10],
+            "time_zone": timezone_name,
+            "start_date": local_start_date,
+            "end_date": local_end_date,
+            "source_start_date": source_start_date,
+            "source_end_date": source_end_date,
             "flag": _country_flag(country_code),
             "country": EVENT_COUNTRY_ZH.get(
                 shortname,

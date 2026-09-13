@@ -2658,10 +2658,51 @@ def sync_season_race_schedules(
             ):
                 round_number = int(official_event["round_number"])
                 event = local_events[round_number]
+
+                # MotoGP 的部分历史事件元数据结束于周六，而详细 Session
+                # 实际持续到周日。若本地日期正好来自这组错误元数据，则用
+                # Session 推导出的赛道当地日期纠正它；管理员自定义的日期
+                # 不在这里被覆盖。
+                source_dates = (
+                    official_event.get("source_start_date"),
+                    official_event.get("source_end_date"),
+                )
+                corrected_dates = (
+                    official_event.get("start_date"),
+                    official_event.get("end_date"),
+                )
+                if (
+                    (event["start_date"], event["end_date"]) == source_dates
+                    and corrected_dates != source_dates
+                ):
+                    before_event = dict(event)
+                    cur.execute(
+                        """
+                        UPDATE race_events
+                        SET start_date = %s, end_date = %s, version = version + 1
+                        WHERE id = %s
+                        """,
+                        (*corrected_dates, event["id"]),
+                    )
+                    event = _fetch_race_event(cur, event["id"])
+                    local_events[round_number] = event
+                    _insert_operation_log(
+                        cur,
+                        operator_id,
+                        operator_username,
+                        "update",
+                        "race",
+                        event["id"],
+                        f"{season} 第{round_number}站 {event['country']}",
+                        before_data=before_event,
+                        after_data=event,
+                    )
                 items = official_event.get("items") or []
                 if not items:
                     raise ValueError(f"官网第 {round_number} 站没有可导入的赛道日程")
-                earliest_date, latest_date = _race_schedule_date_bounds(event)
+                # 官网明细已转换为北京时间；校验边界必须使用同一份官方
+                # Session 推导出的当地比赛周末，不能依赖有缺陷的元数据。
+                earliest_date, latest_date = _race_schedule_date_bounds(official_event)
                 invalid_date = next(
                     (
                         row["schedule_date"] for row in items
@@ -2971,9 +3012,13 @@ def replace_race_results(
             if results:
                 rider_ids = [row["rider_id"] for row in results]
                 placeholders = ",".join(["%s"] * len(rider_ids))
-                cur.execute(f"SELECT id FROM riders WHERE id IN ({placeholders})", rider_ids)
+                cur.execute(
+                    f"SELECT rider_id FROM season_riders WHERE season=%s "
+                    f"AND rider_id IN ({placeholders})",
+                    (event["season"], *rider_ids),
+                )
                 if len(cur.fetchall()) != len(rider_ids):
-                    raise ValueError("排名中包含不存在的车手")
+                    raise ValueError("排名中包含不属于当前赛季的车手")
 
             cur.execute("DELETE FROM race_results WHERE result_set_id = %s", (result_set_id,))
             if results:
