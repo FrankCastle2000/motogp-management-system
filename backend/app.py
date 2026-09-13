@@ -663,6 +663,26 @@ def api_create_season():
     return jsonify({"ok": True, "data": result, "message": f"{year} 赛季创建成功"}), 201
 
 
+@app.delete("/api/seasons/<int:year>")
+@admin_required
+def api_delete_season(year: int):
+    """删除指定赛季及其名单、积分、赛程、日程和比赛成绩。"""
+    _parse_season_value(year, write=True)
+    body = request.get_json(silent=True) or {}
+    if str(body.get("confirmation") or "").strip() != str(year):
+        raise ValueError(f"请输入赛季年份 {year} 以确认删除")
+    summary = db.delete_season(
+        year,
+        operator_id=session.get("user_id"),
+        operator_username=session.get("username", ""),
+    )
+    return jsonify({
+        "ok": True,
+        "data": summary,
+        "message": f"{year} 赛季及其全部数据已删除",
+    })
+
+
 @app.put("/api/seasons/<int:year>/roster-status")
 @admin_required
 def api_update_season_roster_status(year: int):

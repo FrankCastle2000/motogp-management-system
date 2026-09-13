@@ -183,6 +183,14 @@ def fetch_season_schedules(season_year: int):
             round_number = int(event.get("sequence") or fallback_round)
         except (TypeError, ValueError):
             round_number = fallback_round
+        country_en = str(
+            event.get("additional_name") or circuit.get("country") or shortname
+        ).strip().upper()
+        country_key = (
+            shortname
+            if shortname in EVENT_COUNTRY_ZH
+            else str(circuit.get("country") or country_en).strip().upper()
+        )
         # 部分历史赛季的事件元数据把周末结束时间写在周六，但详细
         # Session 仍完整覆盖到周日。以赛道当地的 Session 日期推导
         # 周末边界，既能修正这类官方数据问题，也不会混用北京时间日期。
@@ -207,9 +215,9 @@ def fetch_season_schedules(season_year: int):
                 shortname,
                 str(circuit.get("country") or event.get("additional_name") or shortname),
             ),
-            "country_en": str(
-                event.get("additional_name") or circuit.get("country") or shortname
-            ).strip().upper(),
+            "country_en": country_en,
+            "country_key": country_key,
+            "country_name_reviewed": shortname in EVENT_COUNTRY_ZH,
             "circuit": str(circuit.get("name") or event.get("name") or "未知赛道").strip(),
             "items": items,
         })

@@ -189,6 +189,24 @@ def init_database():
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS event_country_translations (
+                    country_key VARCHAR(64) PRIMARY KEY COMMENT '标准化英文国家或地区名',
+                    country_en VARCHAR(64) NOT NULL COMMENT '英文国家或地区名',
+                    chinese_name VARCHAR(64) NOT NULL COMMENT '中文国家或地区名',
+                    source ENUM('existing', 'manual', 'builtin', 'fallback')
+                        NOT NULL DEFAULT 'fallback' COMMENT '译名来源',
+                    is_reviewed TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否经管理员确认',
+                    updated_by INT DEFAULT NULL COMMENT '最后确认管理员ID',
+                    version INT NOT NULL DEFAULT 1 COMMENT '并发控制版本号',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    CONSTRAINT fk_country_translation_user FOREIGN KEY (updated_by)
+                        REFERENCES users(id) ON DELETE SET NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                """
+            )
             cur.execute("SHOW COLUMNS FROM riders LIKE 'nickname'")
             if cur.fetchone():
                 cur.execute("ALTER TABLE riders DROP COLUMN nickname")
@@ -264,6 +282,7 @@ def init_database():
                     flag VARCHAR(16) NOT NULL DEFAULT '🏁' COMMENT '国家或地区旗帜',
                     country VARCHAR(64) NOT NULL COMMENT '国家或地区中文名',
                     country_en VARCHAR(64) NOT NULL COMMENT '国家或地区英文名',
+                    country_key VARCHAR(64) NOT NULL COMMENT '国家或地区映射键',
                     start_date DATE NOT NULL COMMENT '比赛周末开始日期',
                     end_date DATE NOT NULL COMMENT '比赛周末结束日期',
                     circuit VARCHAR(128) NOT NULL COMMENT '赛道名称',
@@ -275,6 +294,25 @@ def init_database():
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                 """
             )
+            cur.execute("SHOW COLUMNS FROM race_events LIKE 'country_key'")
+            if not cur.fetchone():
+                cur.execute(
+                    "ALTER TABLE race_events ADD COLUMN country_key VARCHAR(64) NULL "
+                    "COMMENT '国家或地区映射键' AFTER country_en"
+                )
+                cur.execute(
+                    """
+                    UPDATE race_events
+                    SET country_key = CASE
+                        WHEN country REGEXP '[一-龥]' THEN UPPER(TRIM(country_en))
+                        ELSE UPPER(TRIM(country))
+                    END
+                    """
+                )
+                cur.execute(
+                    "ALTER TABLE race_events MODIFY COLUMN country_key VARCHAR(64) NOT NULL "
+                    "COMMENT '国家或地区映射键'"
+                )
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS race_schedule_sets (
@@ -481,10 +519,14 @@ def init_database():
                 cur.executemany(
                     """
                     INSERT INTO race_events
-                        (season, round_number, flag, country, country_en, start_date, end_date, circuit)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        (season, round_number, flag, country, country_en, country_key,
+                         start_date, end_date, circuit)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
-                    RACE_EVENT_SEED,
+                    [
+                        (*row[:5], str(row[4]).strip().upper(), *row[5:])
+                        for row in RACE_EVENT_SEED
+                    ],
                 )
             if not standings_table_existed:
                 cur.executemany(
@@ -518,6 +560,33 @@ def init_database():
                        CASE WHEN chinese_name = english_name OR chinese_name IN ('未知', '')
                             THEN 0 ELSE 1 END
                 FROM riders
+                """
+            )
+            cur.execute(
+                """
+                INSERT IGNORE INTO event_country_translations
+                    (country_key, country_en, chinese_name, source, is_reviewed)
+                SELECT country_key, MAX(country_en), MAX(country),
+                       CASE WHEN MAX(country) REGEXP '[一-龥]'
+                            THEN 'existing' ELSE 'fallback' END,
+                       CASE WHEN MAX(country) REGEXP '[一-龥]' THEN 1 ELSE 0 END
+                FROM race_events
+                WHERE TRIM(country_key) <> ''
+                GROUP BY country_key
+                """
+            )
+            cur.execute(
+                """
+                UPDATE event_country_translations
+                SET source = 'fallback', is_reviewed = 0, updated_by = NULL
+                WHERE source = 'existing' AND chinese_name NOT REGEXP '[一-龥]'
+                """
+            )
+            cur.execute(
+                """
+                DELETE ect FROM event_country_translations ect
+                LEFT JOIN race_events re ON re.country_key = ect.country_key
+                WHERE ect.source = 'fallback' AND ect.is_reviewed = 0 AND re.id IS NULL
                 """
             )
             if not season_roster_tables_existed:
@@ -812,6 +881,74 @@ def _set_canonical_chinese_name(
     )
     # 保留旧字段作为兼容镜像，所有历史赛季仍通过同一 rider_id 取得该名称。
     cur.execute("UPDATE riders SET chinese_name=%s WHERE id=%s", (name, rider_id))
+
+
+def _country_translation_key(country_en: str):
+    return " ".join(str(country_en or "").strip().upper().split())
+
+
+def _set_canonical_country_name(
+    cur,
+    country_key: str,
+    country_en: str,
+    chinese_name: str,
+    *,
+    source: str,
+    reviewed: bool,
+    updated_by=None,
+):
+    """维护跨赛季国家中文映射；自动同步不得覆盖管理员确认的译名。"""
+    english_name = str(country_en or "").strip()
+    key = _country_translation_key(country_key or english_name)
+    name = str(chinese_name or english_name).strip()
+    if not key or not name:
+        raise ValueError("国家或地区的中英文名称不能为空")
+    cur.execute(
+        "SELECT chinese_name, source, is_reviewed FROM event_country_translations "
+        "WHERE country_key = %s",
+        (key,),
+    )
+    existing = cur.fetchone()
+    if not (existing and existing["is_reviewed"] and not reviewed):
+        cur.execute(
+            """
+            INSERT INTO event_country_translations
+                (country_key, country_en, chinese_name, source, is_reviewed, updated_by)
+            VALUES (%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                version=version + IF(chinese_name <> VALUES(chinese_name)
+                    OR source <> VALUES(source) OR is_reviewed <> VALUES(is_reviewed), 1, 0),
+                country_en=VALUES(country_en), chinese_name=VALUES(chinese_name),
+                source=VALUES(source), is_reviewed=VALUES(is_reviewed),
+                updated_by=VALUES(updated_by)
+            """,
+            (
+                key,
+                english_name,
+                name,
+                source,
+                1 if reviewed else 0,
+                updated_by if reviewed else None,
+            ),
+        )
+    cur.execute(
+        "SELECT chinese_name, source, is_reviewed FROM event_country_translations "
+        "WHERE country_key = %s",
+        (key,),
+    )
+    translation = cur.fetchone()
+    if translation["is_reviewed"]:
+        cur.execute(
+            "UPDATE race_events SET country = %s, version = version + 1 "
+            "WHERE country_key = %s AND country <> %s",
+            (translation["chinese_name"], key, translation["chinese_name"]),
+        )
+    return {
+        "country_key": key,
+        "chinese_name": translation["chinese_name"],
+        "source": translation["source"],
+        "is_reviewed": bool(translation["is_reviewed"]),
+    }
 
 
 def _serialize_rider(row):
@@ -2134,6 +2271,9 @@ def _serialize_race_event(row):
         "flag": row["flag"],
         "country": row["country"],
         "country_en": row["country_en"],
+        "country_key": row.get("country_key") or _country_translation_key(row["country_en"]),
+        "country_name_source": row.get("country_name_source") or "fallback",
+        "country_name_reviewed": bool(row.get("country_name_reviewed", True)),
         "start_date": _format_date(row["start_date"]),
         "end_date": _format_date(row["end_date"]),
         "circuit": row["circuit"],
@@ -2212,6 +2352,90 @@ def create_season(year: int, operator_id=None, operator_username=""):
         conn.close()
 
 
+def delete_season(year: int, operator_id=None, operator_username=""):
+    """事务化删除一个赛季的名单、积分、赛程、日程和比赛成绩。"""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT year, roster_complete, version FROM seasons WHERE year = %s FOR UPDATE",
+                (year,),
+            )
+            season = cur.fetchone()
+            if not season:
+                raise ValueError(f"{year} 赛季不存在")
+
+            count_queries = {
+                "teams": "SELECT COUNT(*) AS cnt FROM season_teams WHERE season = %s",
+                "riders": "SELECT COUNT(*) AS cnt FROM season_riders WHERE season = %s",
+                "standings": "SELECT COUNT(*) AS cnt FROM rider_standings WHERE season = %s",
+                "events": "SELECT COUNT(*) AS cnt FROM race_events WHERE season = %s",
+                "schedule_items": """
+                    SELECT COUNT(*) AS cnt FROM race_schedule_items rsi
+                    INNER JOIN race_schedule_sets rss ON rss.id = rsi.schedule_set_id
+                    INNER JOIN race_events re ON re.id = rss.race_event_id
+                    WHERE re.season = %s
+                """,
+                "results": """
+                    SELECT COUNT(*) AS cnt FROM race_results rr
+                    INNER JOIN race_result_sets rrs ON rrs.id = rr.result_set_id
+                    INNER JOIN race_events re ON re.id = rrs.race_event_id
+                    WHERE re.season = %s
+                """,
+            }
+            summary = {"season": year}
+            for name, sql in count_queries.items():
+                cur.execute(sql, (year,))
+                summary[name] = int(cur.fetchone()["cnt"])
+
+            cur.execute("SELECT id FROM race_events WHERE season = %s", (year,))
+            event_ids = [int(row["id"]) for row in cur.fetchall()]
+
+            # 分站下的日程与赛果由外键级联删除，其余赛季数据显式删除。
+            cur.execute("DELETE FROM rider_standings WHERE season = %s", (year,))
+            cur.execute("DELETE FROM race_events WHERE season = %s", (year,))
+            cur.execute("DELETE FROM season_riders WHERE season = %s", (year,))
+            cur.execute("DELETE FROM season_teams WHERE season = %s", (year,))
+            cur.execute("DELETE FROM seasons WHERE year = %s", (year,))
+
+            season_sync_keys = (
+                f"motogp-roster:{year}",
+                f"motogp-race-schedules:{year}",
+                f"motogp-finished-results:{year}",
+                f"motogp-rider-standings:{year}",
+            )
+            placeholders = ",".join(["%s"] * len(season_sync_keys))
+            cur.execute(
+                f"DELETE FROM external_sync_state WHERE sync_key IN ({placeholders})",
+                season_sync_keys,
+            )
+            if event_ids:
+                event_patterns = [f"motogp-race-results:{event_id}:%" for event_id in event_ids]
+                conditions = " OR ".join(["sync_key LIKE %s"] * len(event_patterns))
+                cur.execute(
+                    f"DELETE FROM external_sync_state WHERE {conditions}",
+                    event_patterns,
+                )
+
+            _insert_operation_log(
+                cur,
+                operator_id,
+                operator_username,
+                "delete",
+                "season",
+                year,
+                f"{year} 赛季及全部赛季数据",
+                before_data=summary,
+            )
+        conn.commit()
+        return summary
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def get_season(year: int):
     return next((item for item in list_seasons() if item["year"] == year), None)
 
@@ -2273,9 +2497,15 @@ def set_season_roster_complete(
 def _fetch_race_event(cur, event_id: int):
     cur.execute(
         """
-        SELECT id, season, round_number, flag, country, country_en,
-               start_date, end_date, circuit, version, updated_at
-        FROM race_events WHERE id = %s
+        SELECT re.id, re.season, re.round_number, re.flag, re.country, re.country_en,
+               re.country_key,
+               ect.source AS country_name_source,
+               ect.is_reviewed AS country_name_reviewed,
+               re.start_date, re.end_date, re.circuit, re.version, re.updated_at
+        FROM race_events re
+        LEFT JOIN event_country_translations ect
+          ON ect.country_key = re.country_key
+        WHERE re.id = %s
         """,
         (event_id,),
     )
@@ -2287,15 +2517,20 @@ def list_race_events(season: int | None = None):
     try:
         with conn.cursor() as cur:
             sql = """
-                SELECT id, season, round_number, flag, country, country_en,
-                       start_date, end_date, circuit, version, updated_at
-                FROM race_events
+                SELECT re.id, re.season, re.round_number, re.flag, re.country, re.country_en,
+                       re.country_key,
+                       ect.source AS country_name_source,
+                       ect.is_reviewed AS country_name_reviewed,
+                       re.start_date, re.end_date, re.circuit, re.version, re.updated_at
+                FROM race_events re
+                LEFT JOIN event_country_translations ect
+                  ON ect.country_key = re.country_key
             """
             params = ()
             if season is not None:
-                sql += " WHERE season = %s"
+                sql += " WHERE re.season = %s"
                 params = (season,)
-            sql += " ORDER BY season DESC, round_number ASC"
+            sql += " ORDER BY re.season DESC, re.round_number ASC"
             cur.execute(sql, params)
             return [_serialize_race_event(row) for row in cur.fetchall()]
     finally:
@@ -2320,12 +2555,25 @@ def create_race_event(
             cur.execute(
                 """
                 INSERT INTO race_events
-                    (season, round_number, flag, country, country_en, start_date, end_date, circuit)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    (season, round_number, flag, country, country_en, country_key,
+                     start_date, end_date, circuit)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
-                (season, round_number, flag, country, country_en, start_date, end_date, circuit),
+                (
+                    season, round_number, flag, country, country_en,
+                    _country_translation_key(country_en), start_date, end_date, circuit,
+                ),
             )
             event_id = cur.lastrowid
+            _set_canonical_country_name(
+                cur,
+                country_en,
+                country_en,
+                country,
+                source="manual",
+                reviewed=True,
+                updated_by=operator_id,
+            )
             event = _fetch_race_event(cur, event_id)
             _insert_operation_log(
                 cur, operator_id, operator_username, "create", "race",
@@ -2375,6 +2623,15 @@ def update_race_event(
             )
             if cur.rowcount == 0:
                 raise ConflictError("该赛程已被其他管理员修改，请刷新后重试")
+            _set_canonical_country_name(
+                cur,
+                before_event.get("country_key") or country_en,
+                country_en,
+                country,
+                source="manual",
+                reviewed=True,
+                updated_by=operator_id,
+            )
             event = _fetch_race_event(cur, event_id)
             _insert_operation_log(
                 cur, operator_id, operator_username, "update", "race",
@@ -2593,15 +2850,46 @@ def sync_season_race_schedules(
 ):
     """在单个事务中用官网数据替换一个赛季的全部分站日程。"""
     conn = get_connection()
-    summary = {"season": season, "events": 0, "items": 0, "details": []}
+    summary = {
+        "season": season,
+        "events": 0,
+        "items": 0,
+        "details": [],
+        "pending_countries": [],
+    }
     try:
         with conn.cursor() as cur:
+            cur.execute("INSERT IGNORE INTO seasons (year) VALUES (%s)", (season,))
+            pending_keys = set()
+            for official_event in official_events:
+                reviewed = bool(official_event.get("country_name_reviewed"))
+                translation = _set_canonical_country_name(
+                    cur,
+                    official_event.get("country_key") or official_event.get("country_en") or "UNKNOWN",
+                    official_event.get("country_en") or "UNKNOWN",
+                    official_event.get("country") or "未知",
+                    source="builtin" if reviewed else "fallback",
+                    reviewed=reviewed,
+                )
+                official_event["resolved_country"] = translation["chinese_name"]
+                if not translation["is_reviewed"] and translation["country_key"] not in pending_keys:
+                    pending_keys.add(translation["country_key"])
+                    summary["pending_countries"].append({
+                        "country_en": official_event.get("country_en") or "UNKNOWN",
+                        "current_name": translation["chinese_name"],
+                    })
             cur.execute(
                 """
-                SELECT id, season, round_number, flag, country, country_en,
-                       start_date, end_date, circuit, version, updated_at
-                FROM race_events WHERE season = %s
-                ORDER BY round_number FOR UPDATE
+                SELECT re.id, re.season, re.round_number, re.flag, re.country, re.country_en,
+                       re.country_key,
+                       ect.source AS country_name_source,
+                       ect.is_reviewed AS country_name_reviewed,
+                       re.start_date, re.end_date, re.circuit, re.version, re.updated_at
+                FROM race_events re
+                LEFT JOIN event_country_translations ect
+                  ON ect.country_key = re.country_key
+                WHERE re.season = %s
+                ORDER BY re.round_number FOR UPDATE
                 """,
                 (season,),
             )
@@ -2609,7 +2897,6 @@ def sync_season_race_schedules(
                 row["round_number"]: _serialize_race_event(row)
                 for row in cur.fetchall()
             }
-            cur.execute("INSERT IGNORE INTO seasons (year) VALUES (%s)", (season,))
             official_rounds = {int(event["round_number"]) for event in official_events}
             for official_event in sorted(
                 official_events, key=lambda event: int(event["round_number"])
@@ -2620,16 +2907,17 @@ def sync_season_race_schedules(
                 cur.execute(
                     """
                     INSERT INTO race_events
-                        (season, round_number, flag, country, country_en,
+                        (season, round_number, flag, country, country_en, country_key,
                          start_date, end_date, circuit)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         season,
                         round_number,
                         official_event.get("flag") or "🏁",
-                        official_event.get("country") or "未知",
+                        official_event.get("resolved_country") or "未知",
                         official_event.get("country_en") or "UNKNOWN",
+                        official_event.get("country_key") or official_event.get("country_en") or "UNKNOWN",
                         official_event["start_date"],
                         official_event["end_date"],
                         official_event.get("circuit") or "未知赛道",
@@ -2658,6 +2946,49 @@ def sync_season_race_schedules(
             ):
                 round_number = int(official_event["round_number"])
                 event = local_events[round_number]
+
+                official_country_key = _country_translation_key(
+                    official_event.get("country_key")
+                    or official_event.get("country_en")
+                    or "UNKNOWN"
+                )
+                official_country_en = str(
+                    official_event.get("country_en") or "UNKNOWN"
+                ).strip()
+                resolved_country = official_event.get("resolved_country") or "未知"
+                if (
+                    event.get("country_key") != official_country_key
+                    or event["country_en"] != official_country_en
+                    or event["country"] != resolved_country
+                ):
+                    before_event = dict(event)
+                    cur.execute(
+                        """
+                        UPDATE race_events
+                        SET country_key = %s, country_en = %s, country = %s,
+                            version = version + 1
+                        WHERE id = %s
+                        """,
+                        (
+                            official_country_key,
+                            official_country_en,
+                            resolved_country,
+                            event["id"],
+                        ),
+                    )
+                    event = _fetch_race_event(cur, event["id"])
+                    local_events[round_number] = event
+                    _insert_operation_log(
+                        cur,
+                        operator_id,
+                        operator_username,
+                        "update",
+                        "race",
+                        event["id"],
+                        f"{season} 第{round_number}站 {event['country']}",
+                        before_data=before_event,
+                        after_data=event,
+                    )
 
                 # MotoGP 的部分历史事件元数据结束于周六，而详细 Session
                 # 实际持续到周日。若本地日期正好来自这组错误元数据，则用

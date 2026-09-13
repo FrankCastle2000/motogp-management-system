@@ -105,6 +105,7 @@
         </div>
         <div class="standings-admin-actions" id="standings-admin-actions" hidden>
           <button type="button" class="btn-ghost" id="add-season-btn">新增赛季</button>
+          <button type="button" class="btn-danger" id="delete-season-btn">删除赛季</button>
           <button type="button" class="btn-ghost" id="sync-standings-btn">刷新官方积分</button>
           <button type="button" class="btn-primary btn-add" id="add-standing-btn">新增记录</button>
         </div>
@@ -158,6 +159,7 @@
     const seasonFormToast = document.getElementById("season-form-toast");
     const rosterStatus = document.getElementById("standings-roster-status");
     const syncStandingsBtn = document.getElementById("sync-standings-btn");
+    const deleteSeasonButton = document.getElementById("delete-season-btn");
     const addStandingBtn = document.getElementById("add-standing-btn");
 
     const selectedSeasonInfo = () => allSeasons.find((item) => Number(item.year) === selectedSeason);
@@ -358,6 +360,34 @@
         showToast(seasonFormToast, err.message, true);
       } finally {
         button.disabled = false;
+      }
+    });
+    deleteSeasonButton.addEventListener("click", async () => {
+      if (!isAdmin || !selectedSeason) return;
+      const year = selectedSeason;
+      if (!confirm(`确认删除 ${year} 赛季吗？该赛季的车手/车队名单、积分、全部分站日程和比赛成绩都会被永久删除。`)) return;
+      const confirmation = prompt(`此操作不可恢复。请输入赛季年份 ${year} 进行最终确认：`);
+      if (confirmation === null) return;
+      if (confirmation.trim() !== String(year)) {
+        showToast(pageToast, `确认失败：请输入 ${year}`, true);
+        return;
+      }
+      const originalText = deleteSeasonButton.textContent;
+      deleteSeasonButton.disabled = true;
+      deleteSeasonButton.textContent = "正在删除…";
+      try {
+        const result = await apiRequest(`${SEASON_API}/${year}`, {
+          method: "DELETE",
+          body: JSON.stringify({ confirmation }),
+        });
+        await loadData();
+        const summary = result.data || {};
+        showToast(pageToast, `${result.message}：${summary.events || 0} 个分站、${summary.schedule_items || 0} 条日程、${summary.results || 0} 条比赛成绩、${summary.standings || 0} 条积分记录`);
+      } catch (err) {
+        showToast(pageToast, err.message, true);
+      } finally {
+        deleteSeasonButton.disabled = false;
+        deleteSeasonButton.textContent = originalText;
       }
     });
     addStandingBtn.addEventListener("click", () => {

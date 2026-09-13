@@ -120,7 +120,14 @@ body {
 
 .calendar-admin-actions button {
   width: auto;
+  min-height: 38px;
+  padding: 8px 13px;
+  font-size: 0.85rem;
   white-space: nowrap;
+}
+
+.race-country-translation-pending {
+  margin: 5px 0 0;
 }
 
 .season-picker {
@@ -802,7 +809,9 @@ body {
 
 .standings-admin-actions button {
   width: auto;
+  min-height: 38px;
   padding: 8px 13px;
+  font-size: 0.85rem;
   white-space: nowrap;
 }
 
