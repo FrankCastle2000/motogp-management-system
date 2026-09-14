@@ -151,9 +151,24 @@ async function navigateSitePage(url, pushState = true) {
       window.initAuthForm();
     }
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    revealActiveNavigation();
   } catch (err) {
     window.location.href = targetUrl.href;
   }
+}
+
+function revealActiveNavigation() {
+  const activeLink = document.querySelector(".nav-links a.active");
+  if (!activeLink || window.innerWidth > 720) return;
+  requestAnimationFrame(() => {
+    activeLink.scrollIntoView({ behavior: "auto", block: "nearest", inline: "center" });
+  });
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", revealActiveNavigation);
+} else {
+  revealActiveNavigation();
 }
 
 document.addEventListener("click", (event) => {

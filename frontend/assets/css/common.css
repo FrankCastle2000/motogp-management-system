@@ -1991,3 +1991,527 @@ tbody tr:hover {
     height: 42px;
   }
 }
+
+/* Mobile layout: keep controls readable and turn wide desktop tables into cards. */
+@media (max-width: 720px) {
+  html {
+    overflow-x: hidden;
+    background: var(--bg-start);
+  }
+
+  body {
+    min-width: 0;
+    overflow-x: hidden;
+    background-image: none;
+  }
+
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background:
+      linear-gradient(rgba(15, 32, 39, 0.64), rgba(32, 58, 67, 0.78)),
+      url("/assets/images/motogp-background.webp") center / cover no-repeat;
+    pointer-events: none;
+  }
+
+  body > .wrap,
+  body > .auth-wrap {
+    position: relative;
+    z-index: 1;
+  }
+
+  .wrap,
+  .standings-wrap,
+  .riders-wrap,
+  .teams-wrap,
+  .logs-wrap,
+  .calendar-wrap {
+    width: 100%;
+    max-width: none;
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding: 16px 10px 72px;
+    overflow: visible;
+  }
+
+  header.page-header {
+    display: block;
+    margin-bottom: 16px;
+  }
+
+  header.page-header h1 {
+    font-size: clamp(1.65rem, 8vw, 2rem);
+    line-height: 1.12;
+  }
+
+  header.page-header p {
+    margin-top: 6px;
+    font-size: 0.82rem;
+  }
+
+  .user-bar {
+    width: 100%;
+    margin-top: 14px;
+    gap: 8px;
+  }
+
+  .nav-links {
+    order: -1;
+    width: 100%;
+    margin: 0;
+    padding-bottom: 4px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .nav-links::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav-links a {
+    flex: 0 0 auto;
+    padding: 7px 10px;
+    border-radius: 9px;
+    font-size: 0.78rem;
+    scroll-snap-align: center;
+  }
+
+  .user-bar > #user-label {
+    margin-left: 2px;
+  }
+
+  .user-bar > #logout-btn {
+    min-height: 34px;
+    margin-left: auto;
+    padding: 6px 11px;
+  }
+
+  .panel,
+  .calendar-panel {
+    padding: 12px;
+    border-radius: 14px;
+  }
+
+  .standings-panel,
+  .rider-list-panel,
+  .team-list-panel,
+  .log-list-panel {
+    min-height: 0;
+  }
+
+  .panel-heading,
+  .standings-heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .standings-heading-left {
+    align-items: center;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+  }
+
+  .season-picker {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .standings-admin-actions,
+  .entity-admin-actions,
+  .calendar-admin-actions {
+    width: 100%;
+    padding-bottom: 3px;
+    justify-content: flex-start;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .standings-admin-actions::-webkit-scrollbar,
+  .entity-admin-actions::-webkit-scrollbar,
+  .calendar-admin-actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .standings-admin-actions button,
+  .entity-admin-actions button,
+  .calendar-admin-actions button {
+    flex: 0 0 auto;
+    min-height: 38px;
+    padding: 7px 11px;
+    font-size: 0.8rem;
+  }
+
+  .filter-bar,
+  .rider-filter-bar,
+  .log-filter-bar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .filter-bar input,
+  .filter-bar select,
+  .pagination-bar select,
+  input,
+  select,
+  textarea {
+    width: 100%;
+    min-width: 0;
+    font-size: 16px;
+  }
+
+  .rider-filter-bar input:nth-child(2) {
+    min-width: 0;
+  }
+
+  .filter-bar .filter-actions,
+  .filter-actions {
+    grid-column: 1 / -1;
+    width: 152px;
+    margin-left: auto;
+    justify-self: end;
+  }
+
+  .filter-separator {
+    display: none;
+  }
+
+  .table-wrap,
+  .standings-table-wrap,
+  .rider-table-wrap,
+  .team-table-wrap,
+  .log-table-wrap {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .standings-table,
+  .rider-table,
+  .team-table,
+  .user-table,
+  .log-table,
+  .standings-table tbody,
+  .rider-table tbody,
+  .team-table tbody,
+  .user-table tbody,
+  .log-table tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .standings-table thead,
+  .rider-table thead,
+  .team-table thead,
+  .user-table thead,
+  .log-table thead {
+    display: none;
+  }
+
+  .standings-table tbody,
+  .rider-table tbody,
+  .team-table tbody,
+  .user-table tbody,
+  .log-table tbody {
+    display: grid;
+    gap: 10px;
+  }
+
+  .standings-table tbody tr,
+  .rider-table tbody tr,
+  .team-table tbody tr,
+  .user-table tbody tr,
+  .log-table tbody tr {
+    border: 1px solid rgba(126, 184, 218, 0.2);
+    border-radius: 12px;
+    background: rgba(8, 25, 32, 0.72);
+    overflow: hidden;
+  }
+
+  .standings-table td,
+  .rider-table td,
+  .team-table td,
+  .user-table td,
+  .log-table td {
+    min-width: 0;
+    padding: 7px 8px;
+    border: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .standings-table td.empty,
+  .rider-table td.empty,
+  .team-table td.empty,
+  .user-table td.empty,
+  .log-table td.empty {
+    grid-area: auto;
+    grid-column: 1 / -1;
+    width: 100%;
+    padding: 28px 10px;
+    text-align: center;
+  }
+
+  .standings-table tbody tr {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 2px 8px;
+    padding: 11px;
+  }
+
+  .standings-table td:nth-child(1) { grid-area: 1 / 1 / 3 / 2; }
+  .standings-table td:nth-child(2) { grid-area: 2 / 2 / 3 / 3; text-align: left; }
+  .standings-table td:nth-child(3) { grid-area: 1 / 2 / 2 / 3; text-align: left; }
+  .standings-table td:nth-child(4) { grid-area: 3 / 1 / 4 / 4; text-align: left; }
+  .standings-table td:nth-child(5) { grid-area: 4 / 1 / 5 / 4; text-align: left; }
+  .standings-table td:nth-child(6) { grid-area: 1 / 3 / 3 / 4; }
+  .standings-table td:nth-child(7) { grid-area: 5 / 2 / 6 / 3; }
+  .standings-table td:nth-child(8) { grid-area: 5 / 3 / 6 / 4; }
+  .standings-table td:nth-child(9) { grid-area: 6 / 1 / 7 / 4; }
+
+  .standings-table td:nth-child(4),
+  .standings-table td:nth-child(5),
+  .standings-table td:nth-child(7),
+  .standings-table td:nth-child(8) {
+    color: var(--muted);
+    font-size: 0.76rem;
+  }
+
+  .standings-table td:nth-child(4)::before { content: "车队："; }
+  .standings-table td:nth-child(5)::before { content: "制造商："; }
+  .standings-table td:nth-child(7)::before { content: "胜场\A"; white-space: pre; }
+  .standings-table td:nth-child(8)::before { content: "领奖台\A"; white-space: pre; }
+
+  .standings-table .standing-rank {
+    width: 38px;
+    height: 38px;
+  }
+
+  .standings-table .standing-rider-name strong {
+    font-size: 0.98rem;
+  }
+
+  .standings-table .standing-points::after {
+    content: " 分";
+    font-size: 0.7rem;
+    font-weight: 500;
+  }
+
+  .standings-table .row-actions {
+    justify-content: flex-end;
+  }
+
+  .standings-source,
+  .calendar-source {
+    text-align: left;
+    line-height: 1.55;
+  }
+
+  .rider-table tbody tr,
+  .team-table tbody tr,
+  .user-table tbody tr,
+  .log-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 12px;
+    padding: 12px;
+  }
+
+  .rider-table td,
+  .team-table td,
+  .user-table td,
+  .log-table td {
+    display: block;
+    text-align: left;
+    line-height: 1.45;
+  }
+
+  .rider-table td::before,
+  .team-table td::before,
+  .user-table td::before,
+  .log-table td::before {
+    display: block;
+    margin-bottom: 3px;
+    color: var(--muted);
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+
+  .rider-table td:nth-child(1)::before { content: "车手编号"; }
+  .rider-table td:nth-child(2)::before { content: "英文名"; }
+  .rider-table td:nth-child(3)::before { content: "中文名"; }
+  .rider-table td:nth-child(4)::before { content: "国籍"; }
+  .rider-table td:nth-child(5)::before { content: "所属车队"; }
+  .rider-table td:nth-child(6)::before { content: "驾驶车辆"; }
+  .rider-table td:nth-child(7)::before { content: "出生日期"; }
+  .rider-table td:nth-child(8)::before { content: "出生地点"; }
+  .rider-table td:nth-child(9)::before { content: "操作"; }
+  .rider-table td:nth-child(5),
+  .rider-table td:nth-child(6),
+  .rider-table td:nth-child(8),
+  .rider-table td:nth-child(9) { grid-column: 1 / -1; }
+
+  .team-table td:nth-child(1)::before { content: "车队名称"; }
+  .team-table td:nth-child(2)::before { content: "车队成员"; }
+  .team-table td:nth-child(3)::before { content: "车辆制造商"; }
+  .team-table td:nth-child(4)::before { content: "操作"; }
+  .team-table td:nth-child(1),
+  .team-table td:nth-child(2),
+  .team-table td:nth-child(4) { grid-column: 1 / -1; }
+
+  .user-table td:nth-child(1)::before { content: "ID"; }
+  .user-table td:nth-child(2)::before { content: "账号"; }
+  .user-table td:nth-child(3)::before { content: "角色"; }
+  .user-table td:nth-child(4)::before { content: "注册时间"; }
+  .user-table td:nth-child(5)::before { content: "操作"; }
+  .user-table td:nth-child(4),
+  .user-table td:nth-child(5) { grid-column: 1 / -1; }
+
+  .log-table td:nth-child(1)::before { content: "操作时间"; }
+  .log-table td:nth-child(2)::before { content: "操作人"; }
+  .log-table td:nth-child(3)::before { content: "操作"; }
+  .log-table td:nth-child(4)::before { content: "对象类型"; }
+  .log-table td:nth-child(5)::before { content: "对象"; }
+  .log-table td:nth-child(6)::before { content: "修改详情"; }
+  .log-table td:nth-child(5),
+  .log-table td:nth-child(6) { grid-column: 1 / -1; }
+
+  .log-details {
+    text-align: left !important;
+  }
+
+  .log-field-list,
+  .log-change-list li {
+    grid-template-columns: 1fr;
+  }
+
+  .log-arrow {
+    display: none;
+  }
+
+  .translation-pending {
+    margin-left: 0;
+  }
+
+  .row-actions {
+    flex-wrap: wrap;
+  }
+
+  .calendar-toolbar {
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+
+  .calendar-toolbar-main,
+  .calendar-toolbar-side {
+    gap: 9px;
+  }
+
+  .calendar-toolbar-side {
+    display: grid;
+    justify-content: stretch;
+  }
+
+  .calendar-legend {
+    width: 100%;
+    padding: 2px 0 5px;
+    gap: 12px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .race-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .race-card {
+    min-height: 0;
+    padding: 13px;
+  }
+
+  .race-card-actions {
+    gap: 7px;
+  }
+
+  .race-card-actions button {
+    min-height: 34px;
+    padding: 6px 9px;
+    font-size: 0.76rem;
+  }
+
+  .modal {
+    width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+    padding: 15px;
+  }
+
+  .race-results-modal,
+  .race-schedule-modal {
+    width: calc(100vw - 12px);
+  }
+
+  .race-result-table-wrap {
+    overflow-x: auto;
+  }
+
+  .race-result-table {
+    min-width: 620px;
+  }
+
+  .auth-wrap {
+    min-height: 100dvh;
+    padding: 14px;
+  }
+
+  .auth-card {
+    width: 100%;
+    padding: 24px 18px;
+    border-radius: 16px;
+  }
+
+  .password-panel {
+    width: 100%;
+    margin-top: 0;
+  }
+
+  .music-player {
+    right: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom));
+    width: 38px;
+    height: 38px;
+  }
+
+  .music-toggle {
+    width: 38px;
+    height: 38px;
+  }
+}
+
+@media (max-width: 390px) {
+  .filter-bar,
+  .rider-filter-bar,
+  .log-filter-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .standings-table td:nth-child(5),
+  .standings-table td:nth-child(7),
+  .standings-table td:nth-child(8) {
+    font-size: 0.7rem;
+  }
+}
